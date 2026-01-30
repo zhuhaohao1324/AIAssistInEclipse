@@ -1,0 +1,17 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: Aiassist
+Bundle-SymbolicName: cn.com.csrcb.aiassist;singleton:=true
+Bundle-Version: 1.0.0.qualifier
+Bundle-Activator: cn.com.csrcb.aiassist.Activator
+Require-Bundle: org.eclipse.ui,
+ org.eclipse.core.runtime,
+ org.eclipse.jface.text,
+ org.eclipse.ui.workbench.texteditor,
+ org.eclipse.jdt.ui,
+ org.eclipse.jdt.core
+Bundle-RequiredExecutionEnvironment: JavaSE-1.8
+Automatic-Module-Name: cn.com.csrcb.aiassist
+Bundle-ActivationPolicy: lazy
+Bundle-ClassPath: lib/com.google.gson_2.8.2.v20180104-1110.jar,
+ .

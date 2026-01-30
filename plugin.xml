@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+
+   <!-- 1) 定义命令 -->
+   <extension point="org.eclipse.ui.commands">
+      <command
+            id="cn.com.csrcb.aiassist.command.aiComplete"
+            name="AI Assist: Complete Code"
+            description="Send nearby code to local AI model and insert completion."/>
+   </extension>
+
+   <!-- 2) 绑定 Handler -->
+   <extension point="org.eclipse.ui.handlers">
+      <handler
+            commandId="cn.com.csrcb.aiassist.command.aiComplete"
+            class="cn.com.csrcb.aiassist.AICompletionHandler">
+      </handler>
+   </extension>
+
+   <!-- 3) 快捷键绑定：Alt+Q，仅在文本编辑器范围生效 -->
+   <extension point="org.eclipse.ui.bindings">
+      <key
+            commandId="cn.com.csrcb.aiassist.command.aiComplete"
+            schemeId="org.eclipse.ui.defaultAcceleratorConfiguration"
+            sequence="ALT+Q"
+            contextId="org.eclipse.ui.textEditorScope"/>
+   </extension>
+</plugin>
