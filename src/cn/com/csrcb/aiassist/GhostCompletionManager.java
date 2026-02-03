@@ -5,6 +5,7 @@ import org.eclipse.jface.text.DocumentEvent;
 import org.eclipse.jface.text.IDocument;
 import org.eclipse.jface.text.IDocumentListener;
 import org.eclipse.jface.text.ITextViewerExtension5;
+import org.eclipse.jface.text.TextSelection;
 import org.eclipse.jface.text.source.ISourceViewer;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.StyledText;
@@ -23,461 +24,378 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.ui.texteditor.ITextEditor;
 
 /**
- * Ghost (inline, gray) completion UI: - Show suggestion as "ghost text" at
- * caret without modifying document - Tab to accept (insert into document) - Esc
- * to cancel - Cancel on navigation keys / mouse click - Intelligent cancel on
- * document changes: - Changes after anchor: keep - Changes before anchor: shift
- * anchor by delta - Overlap anchor or edit at anchor: cancel
- *
- * ABIDE/∑‚◊∞IDE ºÊ»›‘ˆ«ø£∫ - ”≈œ»¥” ISourceViewer.getTextWidget() ªÒ»°±‡º≠«¯ StyledText£®∏¸◊º»∑£© -
- * »Ù¥Ê‘⁄ projection/folding/”≥…‰Œƒµµ£¨ π”√ ITextViewerExtension5 ◊ˆ modelOffset ->
- * widgetOffset ”≥…‰ - ‘ˆº” DEBUG »’÷æ±„”⁄∂®Œª°∞ƒ√≤ªµΩøÿº˛ / offset ”≥…‰ ß∞‹ / getLocationAtOffset
- * “Ï≥£°±µ»Œ Ã‚
+ * Ghost (inline, gray) completion UI (ABIDE compatible):
+ * - Paint at caret using widget offset
+ * - Insert at stored model/doc offset
+ * - Accept (Tab): move caret using widget anchor + inserted length (no doc->widget mapping)
  */
 public class GhostCompletionManager {
 
-	// ===== Debug =====
-	private static final boolean DEBUG = true;
-
-	private static void debug(String s) {
-		if (DEBUG)
-			System.out.println(s);
-	}
-
-	private final ITextEditor editor;
-	private final IDocument document;
-	private final StyledText styledText;
-
-	/** widget offset£®≤ª « document offset£© */
-	private int anchorWidgetOffset;
-
-	/** Ghost suggestion text (may contain newlines). */
-	private String suggestion;
-
-	private boolean active = false;
-
-	private PaintListener paintListener;
-	private VerifyKeyListener keyListener;
-	private IDocumentListener docListener;
-	private MouseListener mouseListener;
-
-	private Color ghostColor;
-
-	private GhostCompletionManager(ITextEditor editor, StyledText styledText, IDocument doc) {
-		this.editor = editor;
-		this.styledText = styledText;
-		this.document = doc;
-	}
-
-	/**
-	 * Show ghost suggestion in the given editor at document offset. Internally maps
-	 * document/model offset to widget offset if possible.
-	 */
-	public static GhostCompletionManager show(ITextEditor editor, int documentOffset, String suggestion) {
-		if (editor == null)
-			return null;
-
-		StyledText st = getStyledText(editor);
-		if (st == null || st.isDisposed()) {
-			debug("Ghost: StyledText is null/disposed");
-			return null;
-		}
-
-		IDocument doc = editor.getDocumentProvider().getDocument(editor.getEditorInput());
-		if (doc == null) {
-			debug("Ghost: Document is null");
-			return null;
-		}
-
-		// πÿº¸£∫∞— document offset ”≥…‰Œ™ widget offset
-		int widgetOffset = mapDocOffsetToWidgetOffset(editor, documentOffset);
-		if (widgetOffset < 0) {
-			debug("Ghost: offset mapping failed. docOffset=" + documentOffset);
-			return null;
-		}
-
-		GhostCompletionManager mgr = new GhostCompletionManager(editor, st, doc);
-		mgr.internalShow(widgetOffset, suggestion);
-		return mgr.active ? mgr : null;
-	}
-
-	/** Returns whether ghost is currently active. */
-	public boolean isActive() {
-		return active;
-	}
-
-	/** Programmatically cancel ghost (does not modify document). */
-	public void cancelProgrammatically() {
-		cancel();
-	}
-
-	private void internalShow(int widgetOffset, String text) {
-		if (text == null || text.trim().isEmpty())
-			return;
-
-		// Clamp to StyledText range.
-		int charCount = styledText.getCharCount();
-		if (widgetOffset < 0)
-			widgetOffset = 0;
-		if (widgetOffset > charCount)
-			widgetOffset = charCount;
-
-		this.anchorWidgetOffset = widgetOffset;
-		this.suggestion = text;
-		this.active = true;
-
-		hookListeners();
-
-		// »√π‚±ÍŒª÷√ø…º˚£¨±‹√‚ª≠µΩ≤ªø…º˚«¯”Ú”√ªß“‘Œ™√ªœ‘ æ
-		try {
-			styledText.setSelection(anchorWidgetOffset);
-			styledText.showSelection();
-		} catch (Exception ignore) {
-		}
-
-		styledText.redraw();
-		debug("Ghost: show at widgetOffset=" + anchorWidgetOffset + ", charCount=" + charCount);
-	}
-
-	/** Accept: insert suggestion into document, then remove ghost. */
-	private void accept() {
-		if (!active)
-			return;
-
-		final String insertText = suggestion;
-
-		// ◊¢“‚£∫document.replace –Ë“™ document offset
-		// Œ“√«µ±«∞÷ª¥Ê¡À widget offset£¨–Ë”≥…‰ªÿ model offset£®»Ù”≥…‰ ß∞‹£¨ÕÀªØ”√ widget offset£©
-		int insertModelOffset = mapWidgetOffsetToDocOffset(editor, anchorWidgetOffset);
-		if (insertModelOffset < 0) {
-			debug("Ghost: widget->doc mapping failed, fallback to widgetOffset");
-			insertModelOffset = anchorWidgetOffset;
-		}
-
-		cancel(); // œ»»°œ˚ UI º‡Ã˝£¨±‹√‚ documentChanged ªÿµ˜÷ÿ»Î
-
-		try {
-			document.replace(insertModelOffset, 0, insertText);
-
-			// π‚±Í“∆µΩ≤Â»Îƒ©Œ≤£®æ°¡¶£©
-			int newCaretModel = insertModelOffset + insertText.length();
-			int newCaretWidget = mapDocOffsetToWidgetOffset(editor, newCaretModel);
-			if (newCaretWidget < 0)
-				newCaretWidget = Math.min(styledText.getCharCount(), newCaretModel);
-
-			if (!styledText.isDisposed()) {
-				styledText.setSelection(newCaretWidget);
-				styledText.showSelection();
-			}
-		} catch (BadLocationException e) {
-			debug("Ghost: document.replace BadLocation: " + e.getMessage());
-		}
-	}
-
-	/** Cancel: clear ghost and unhook listeners without touching document. */
-	private void cancel() {
-		if (!active)
-			return;
-		active = false;
-		unhookListeners();
-		if (styledText != null && !styledText.isDisposed()) {
-			styledText.redraw();
-		}
-		debug("Ghost: canceled");
-	}
-
-	private void hookListeners() {
-		ghostColor = Display.getDefault().getSystemColor(SWT.COLOR_DARK_GRAY);
-
-		paintListener = e -> {
-			if (!active)
-				return;
-			if (styledText.isDisposed())
-				return;
-
-			int count = styledText.getCharCount();
-			int safeOffset = Math.max(0, Math.min(anchorWidgetOffset, count));
-
-			Point p;
-			try {
-				p = styledText.getLocationAtOffset(safeOffset);
-			} catch (IllegalArgumentException ex) {
-				debug("Ghost: getLocationAtOffset failed. anchorWidgetOffset=" + safeOffset + ", ex="
-						+ ex.getMessage());
-				return;
-			} catch (Exception ex) {
-				debug("Ghost: getLocationAtOffset unexpected ex: " + ex.getMessage());
-				return;
-			}
-
-			drawGhost(e.gc, p.x, p.y);
-		};
-
-		keyListener = event -> {
-			if (!active)
-				return;
-
-			// ESC cancels
-			if (event.keyCode == SWT.ESC) {
-				event.doit = false;
-				cancel();
-				return;
-			}
-
-			// TAB accepts
-			if (event.keyCode == SWT.TAB) {
-				event.doit = false;
-				accept();
-				return;
-			}
-
-			// Navigation keys cancel
-			if (event.keyCode == SWT.ARROW_LEFT || event.keyCode == SWT.ARROW_RIGHT || event.keyCode == SWT.ARROW_UP
-					|| event.keyCode == SWT.ARROW_DOWN || event.keyCode == SWT.PAGE_UP || event.keyCode == SWT.PAGE_DOWN
-					|| event.keyCode == SWT.HOME || event.keyCode == SWT.END) {
-				cancel();
-				return;
-			}
-		};
-
-		// Œƒµµ±‰ªØ£∫’‚¿Ôƒ√µΩµƒ « model/document offset
-		docListener = new IDocumentListener() {
-			@Override
-			public void documentAboutToBeChanged(DocumentEvent event) {
-			}
-
-			@Override
-			public void documentChanged(DocumentEvent event) {
-				if (!active)
-					return;
-
-				// ±‰ªØ∑¢…˙µƒŒª÷√£®model/doc offset£©
-				int changeOffsetModel = event.getOffset();
-				int replacedLen = event.getLength();
-				String newText = event.getText() == null ? "" : event.getText();
-				int insertedLen = newText.length();
-				int delta = insertedLen - replacedLen;
-
-				// ∞—µ±«∞ anchor£®widget£©”≥…‰ªÿ model£¨“‘±„”Î documentChanged µƒ offset ±»Ωœ
-				int anchorModel = mapWidgetOffsetToDocOffset(editor, anchorWidgetOffset);
-				if (anchorModel < 0) {
-					// ”≥…‰ ß∞‹ ±£¨±£ ÿ¥¶¿Ì£∫÷±Ω”»°œ˚£¨±‹√‚¥ÌŒª≤Â»Î
-					debug("Ghost: widget->doc mapping failed during docChanged -> cancel");
-					cancel();
-					return;
-				}
-
-				int changeStart = changeOffsetModel;
-				int changeEnd = changeOffsetModel + replacedLen;
-
-				// 1) Change strictly after anchor: keep
-				if (changeStart > anchorModel) {
-					return;
-				}
-
-				// 2) Overlap anchor: cancel
-				if (changeEnd > anchorModel) {
-					cancel();
-					return;
-				}
-
-				// 3) Change before anchor: shift anchor (in model space), then remap to widget
-				if (changeEnd <= anchorModel) {
-					int newAnchorModel = anchorModel + delta;
-					int newAnchorWidget = mapDocOffsetToWidgetOffset(editor, newAnchorModel);
-					if (newAnchorWidget < 0) {
-						debug("Ghost: doc->widget mapping failed after shift -> cancel");
-						cancel();
-						return;
-					}
-					anchorWidgetOffset = clamp(newAnchorWidget, 0, styledText.getCharCount());
-					styledText.redraw();
-					return;
-				}
-
-				// Fallback
-				cancel();
-			}
-		};
-
-		mouseListener = new MouseAdapter() {
-			@Override
-			public void mouseDown(MouseEvent e) {
-				cancel();
-			}
-		};
-
-		styledText.addPaintListener(paintListener);
-		styledText.addVerifyKeyListener(keyListener);
-		styledText.addMouseListener(mouseListener);
-		document.addDocumentListener(docListener);
-	}
-
-	private void unhookListeners() {
-		if (styledText != null && !styledText.isDisposed()) {
-			if (paintListener != null)
-				styledText.removePaintListener(paintListener);
-			if (keyListener != null)
-				styledText.removeVerifyKeyListener(keyListener);
-			if (mouseListener != null)
-				styledText.removeMouseListener(mouseListener);
-		}
-		if (document != null && docListener != null) {
-			document.removeDocumentListener(docListener);
-		}
-
-		paintListener = null;
-		keyListener = null;
-		docListener = null;
-		mouseListener = null;
-		suggestion = null;
-	}
-
-	/** Draw ghost text at the given (x,y) in the StyledText coordinate system. */
-	private void drawGhost(GC gc, int startX, int startY) {
-		if (suggestion == null || suggestion.isEmpty())
-			return;
-
-		int oldAlpha = gc.getAlpha();
-		Color oldFg = gc.getForeground();
-		Font oldFont = gc.getFont();
-
-		gc.setAlpha(120);
-		gc.setForeground(ghostColor);
-		gc.setFont(styledText.getFont());
-
-		String normalized = suggestion.replace("\r\n", "\n").replace('\r', '\n');
-		String[] lines = normalized.split("\n", -1);
-
-		int lineHeight = styledText.getLineHeight();
-		int x = startX;
-		int y = startY;
-
-		int leftMargin = styledText.getLeftMargin();
-
-		for (int i = 0; i < lines.length; i++) {
-			String line = lines[i];
-			if (!line.isEmpty()) {
-				gc.drawText(line, x, y, true);
-			}
-			y += lineHeight;
-			x = leftMargin;
-		}
-
-		gc.setFont(oldFont);
-		gc.setForeground(oldFg);
-		gc.setAlpha(oldAlpha);
-	}
-
-	// ===== Helpers =====
-
-	private static int clamp(int v, int min, int max) {
-		return Math.max(min, Math.min(max, v));
-	}
-
-	/**
-	 * ”≈œ»¥” ISourceViewer ªÒ»°±‡º≠«¯ StyledText£®◊Ó◊º»∑£© »Ùƒ√≤ªµΩ£¨ÕÀªØµΩ Control adapter£¨»ª∫Û‘Ÿµ›πÈ
-	 * Composite ≤È’“°£
-	 */
-	private static StyledText getStyledText(ITextEditor editor) {
-		try {
-			ISourceViewer viewer = editor.getAdapter(ISourceViewer.class);
-			if (viewer != null && viewer.getTextWidget() != null && !viewer.getTextWidget().isDisposed()) {
-				StyledText st = viewer.getTextWidget();
-				debug("Ghost: got StyledText from ISourceViewer, hash=" + System.identityHashCode(st) + ", charCount="
-						+ st.getCharCount());
-				return st;
-			}
-		} catch (Exception e) {
-			debug("Ghost: getStyledText via ISourceViewer ex: " + e.getMessage());
-		}
-
-		try {
-			Control c = editor.getAdapter(Control.class);
-			if (c instanceof StyledText) {
-				StyledText st = (StyledText) c;
-				debug("Ghost: got StyledText from Control adapter, hash=" + System.identityHashCode(st) + ", charCount="
-						+ st.getCharCount());
-				return st;
-			}
-			if (c instanceof Composite) {
-				StyledText st = findStyledText((Composite) c);
-				if (st != null) {
-					debug("Ghost: found StyledText in Composite, hash=" + System.identityHashCode(st) + ", charCount="
-							+ st.getCharCount());
-				} else {
-					debug("Ghost: no StyledText found in Composite children");
-				}
-				return st;
-			}
-		} catch (Exception e) {
-			debug("Ghost: getStyledText via Control ex: " + e.getMessage());
-		}
-
-		return null;
-	}
-
-	private static StyledText findStyledText(Composite parent) {
-		for (Control child : parent.getChildren()) {
-			if (child instanceof StyledText)
-				return (StyledText) child;
-			if (child instanceof Composite) {
-				StyledText st = findStyledText((Composite) child);
-				if (st != null)
-					return st;
-			}
-		}
-		return null;
-	}
-
-	/**
-	 * model/document offset -> widget offset£®”√”⁄ªÊ÷∆£© »Áπ˚ viewer ÷ß≥÷
-	 * ITextViewerExtension5£¨æÕ”√À¸£ª∑Ò‘ÚÕÀªØ∑µªÿ docOffset°£
-	 */
-	private static int mapDocOffsetToWidgetOffset(ITextEditor editor, int docOffset) {
-		try {
-			ISourceViewer sv = editor.getAdapter(ISourceViewer.class);
-			if (sv == null) {
-				debug("Ghost: ISourceViewer adapter is null (doc->widget fallback)");
-				return docOffset;
-			}
-
-			if (sv instanceof ITextViewerExtension5) {
-				int w = ((ITextViewerExtension5) sv).modelOffset2WidgetOffset(docOffset);
-				debug("Ghost: mapped docOffset " + docOffset + " -> widgetOffset " + w);
-				return w;
-			}
-
-			debug("Ghost: viewer not ITextViewerExtension5 (doc->widget fallback)");
-			return docOffset;
-		} catch (Exception e) {
-			debug("Ghost: doc->widget mapping ex: " + e.getMessage());
-			return -1;
-		}
-	}
-
-	/**
-	 * widget offset -> model/document offset£®”√”⁄’Ê’˝≤Â»Î document£©
-	 */
-	private static int mapWidgetOffsetToDocOffset(ITextEditor editor, int widgetOffset) {
-		try {
-			ISourceViewer sv = editor.getAdapter(ISourceViewer.class);
-			if (sv == null) {
-				debug("Ghost: ISourceViewer adapter is null (widget->doc fallback)");
-				return widgetOffset;
-			}
-
-			if (sv instanceof ITextViewerExtension5) {
-				int m = ((ITextViewerExtension5) sv).widgetOffset2ModelOffset(widgetOffset);
-				debug("Ghost: mapped widgetOffset " + widgetOffset + " -> docOffset " + m);
-				return m;
-			}
-
-			debug("Ghost: viewer not ITextViewerExtension5 (widget->doc fallback)");
-			return widgetOffset;
-		} catch (Exception e) {
-			debug("Ghost: widget->doc mapping ex: " + e.getMessage());
-			return -1;
-		}
-	}
+    private static final boolean DEBUG = true;
+    private static void debug(String s) { if (DEBUG) System.out.println(s); }
+
+    private final ITextEditor editor;
+    private final IDocument document;
+    private final StyledText styledText;
+
+    /** ÁªòÂà∂ÈîöÁÇπÔºöwidget offsetÔºàcaretÔºâ */
+    private int anchorWidgetOffset;
+
+    /** ÊèíÂÖ•ÈîöÁÇπÔºömodel/doc offset */
+    private int anchorModelOffset;
+
+    private String suggestion;
+    private boolean active = false;
+
+    private PaintListener paintListener;
+    private VerifyKeyListener keyListener;
+    private IDocumentListener docListener;
+    private MouseListener mouseListener;
+
+    private Color ghostColor;
+
+    private GhostCompletionManager(ITextEditor editor, StyledText styledText, IDocument doc) {
+        this.editor = editor;
+        this.styledText = styledText;
+        this.document = doc;
+    }
+
+    public static GhostCompletionManager show(ITextEditor editor, int documentOffset, String suggestion) {
+        if (editor == null) return null;
+
+        StyledText st = getStyledText(editor);
+        if (st == null || st.isDisposed()) {
+            debug("Ghost: StyledText is null/disposed");
+            return null;
+        }
+
+        IDocument doc = editor.getDocumentProvider().getDocument(editor.getEditorInput());
+        if (doc == null) {
+            debug("Ghost: Document is null");
+            return null;
+        }
+
+        // ‚úÖ ABIDEÔºöÁªòÂà∂ÈîöÁÇπ‰ºòÂÖàÁî® caret(widget)
+        int widgetOffset = -1;
+        try { widgetOffset = st.getCaretOffset(); } catch (Exception ignore) {}
+
+        // Ëã• caret Êãø‰∏çÂà∞ÔºåÂÜçÂ∞ùËØïÊò†Â∞ÑÔºà‰∏çÂº∫‰æùËµñÔºâ
+        if (widgetOffset < 0) widgetOffset = mapDocOffsetToWidgetOffset(editor, documentOffset);
+        if (widgetOffset < 0) {
+            debug("Ghost: cannot determine widget offset (caret & mapping failed)");
+            return null;
+        }
+
+        GhostCompletionManager mgr = new GhostCompletionManager(editor, st, doc);
+        mgr.internalShow(widgetOffset, documentOffset, suggestion);
+        return mgr.active ? mgr : null;
+    }
+
+    public boolean isActive() { return active; }
+
+    public void cancelProgrammatically() { cancel(); }
+
+    private void internalShow(int widgetOffset, int modelOffset, String text) {
+        if (text == null || text.trim().isEmpty()) return;
+
+        int charCount = styledText.getCharCount();
+        widgetOffset = clamp(widgetOffset, 0, charCount);
+
+        this.anchorWidgetOffset = widgetOffset;
+        this.anchorModelOffset = Math.max(0, modelOffset);
+        this.suggestion = text;
+        this.active = true;
+
+        hookListeners();
+
+        styledText.redraw();
+        styledText.update();
+
+        debug("Ghost: show at widgetOffset=" + anchorWidgetOffset + ", modelOffset=" + anchorModelOffset);
+    }
+
+//    /**
+//     * ‚úÖ ÂÖ≥ÈîÆ‰øÆÂ§çÔºöTab Êé•ÂèóÂêéÔºåÂÖâÊ†á‰ΩçÁΩÆ‰∏çË¶ÅÁî® doc->widget Êò†Â∞ÑÔºàABIDE ‰∏çÂáÜÔºâ
+//     * Áõ¥Êé•Áî®ÔºöanchorWidgetOffset + insertText.length()
+//     * ÂêåÊó∂Áî® selectionProvider ËÆæÁΩÆ model offsetÔºåËÆ© Eclipse/ABIDE selection ÂêåÊ≠•‰∏ÄËá¥„ÄÇ
+//     */
+//    private void accept() {
+//        if (!active) return;
+//
+//        final String insertText = suggestion;
+//        final int insertModelOffset = anchorModelOffset;
+//        final int insertLen = (insertText == null ? 0 : insertText.length());
+//
+//        // ÂÖàÂèñÊ∂à UI ÁõëÂê¨ÔºåÈÅøÂÖç docChanged ÈáçÂÖ•ÂØºËá¥Èîô‰Ωç
+//        cancel();
+//
+//        try {
+//            document.replace(insertModelOffset, 0, insertText);
+//
+//            // 1) model ‰æßÂÖâÊ†áÔºöÁªùÂØπÂáÜÁ°Æ
+//            int newCaretModel = insertModelOffset + insertLen;
+//            try {
+//                editor.getSelectionProvider().setSelection(new TextSelection(newCaretModel, 0));
+//            } catch (Exception ignore) {}
+//
+//            // 2) widget ‰æßÂÖâÊ†áÔºöÁî®‚ÄúÂéü widget ÈîöÁÇπ + ÊèíÂÖ•ÈïøÂ∫¶‚ÄùËÆ°ÁÆóÔºå‰∏çËµ∞Êò†Â∞Ñ
+//            if (!styledText.isDisposed()) {
+//                int newCaretWidget = clamp(anchorWidgetOffset + insertLen, 0, styledText.getCharCount());
+//                styledText.setCaretOffset(newCaretWidget);
+//                styledText.setSelection(newCaretWidget);
+//                // showSelection ÂèØËÉΩËß¶ÂèëÊªöÂä®Ôºå‰ΩÜËøôÊòØÁî®Êà∑‰∏ªÂä® Tab Êé•ÂèóÔºåÈÄöÂ∏∏ÊúüÊúõÁúãÂà∞ÊèíÂÖ•‰ΩçÁΩÆ
+//                styledText.showSelection();
+//            }
+//        } catch (BadLocationException e) {
+//            debug("Ghost: document.replace BadLocation: " + e.getMessage());
+//        }
+//    }
+
+    private void cancel() {
+        if (!active) return;
+        active = false;
+        unhookListeners();
+        if (styledText != null && !styledText.isDisposed()) {
+            styledText.redraw();
+            styledText.update();
+        }
+        debug("Ghost: canceled");
+    }
+
+    private void hookListeners() {
+        ghostColor = Display.getDefault().getSystemColor(SWT.COLOR_DARK_GRAY);
+
+        paintListener = e -> {
+            if (!active) return;
+            if (styledText.isDisposed()) return;
+
+            int count = styledText.getCharCount();
+            int safeOffset = clamp(anchorWidgetOffset, 0, count);
+
+            Point p;
+            try {
+                p = styledText.getLocationAtOffset(safeOffset);
+            } catch (IllegalArgumentException ex) {
+                debug("Ghost: getLocationAtOffset failed. anchorWidgetOffset=" + safeOffset + ", ex=" + ex.getMessage());
+                return;
+            } catch (Exception ex) {
+                debug("Ghost: getLocationAtOffset unexpected ex: " + ex.getMessage());
+                return;
+            }
+
+            drawGhost(e.gc, p.x, p.y);
+        };
+
+        keyListener = event -> {
+            if (!active) return;
+
+            if (event.keyCode == SWT.ESC) {
+                event.doit = false;
+                cancel();
+                return;
+            }
+
+            if (event.keyCode == SWT.TAB) {
+                event.doit = false;
+                accept();
+                return;
+            }
+
+            if (event.keyCode == SWT.ARROW_LEFT || event.keyCode == SWT.ARROW_RIGHT
+                    || event.keyCode == SWT.ARROW_UP || event.keyCode == SWT.ARROW_DOWN
+                    || event.keyCode == SWT.PAGE_UP || event.keyCode == SWT.PAGE_DOWN
+                    || event.keyCode == SWT.HOME || event.keyCode == SWT.END) {
+                cancel();
+                return;
+            }
+        };
+
+        docListener = new IDocumentListener() {
+            @Override public void documentAboutToBeChanged(DocumentEvent event) {}
+
+            @Override
+            public void documentChanged(DocumentEvent event) {
+                if (!active) return;
+
+                int changeOffsetModel = event.getOffset();
+                int replacedLen = event.getLength();
+                String newText = event.getText() == null ? "" : event.getText();
+                int insertedLen = newText.length();
+                int delta = insertedLen - replacedLen;
+
+                int changeStart = changeOffsetModel;
+                int changeEnd = changeOffsetModel + replacedLen;
+
+                // Change after anchor: keep
+                if (changeStart > anchorModelOffset) return;
+
+                // Overlap anchor: cancel
+                if (changeEnd > anchorModelOffset) {
+                    cancel();
+                    return;
+                }
+
+                // Change before anchor: shift anchor (model + widget)
+                if (changeEnd <= anchorModelOffset) {
+                    anchorModelOffset = anchorModelOffset + delta;
+                    if (anchorModelOffset < 0) anchorModelOffset = 0;
+
+                    // widget anchorÔºö‰ºòÂÖàÊò†Â∞ÑÔºåÂ§±Ë¥•Â∞±Âπ≥Áßª
+                    int newAnchorWidget = mapDocOffsetToWidgetOffset(editor, anchorModelOffset);
+                    if (newAnchorWidget >= 0) {
+                        anchorWidgetOffset = clamp(newAnchorWidget, 0, styledText.getCharCount());
+                    } else {
+                        anchorWidgetOffset = clamp(anchorWidgetOffset + delta, 0, styledText.getCharCount());
+                    }
+
+                    styledText.redraw();
+                    styledText.update();
+                    return;
+                }
+
+                cancel();
+            }
+        };
+
+        mouseListener = new MouseAdapter() {
+            @Override public void mouseDown(MouseEvent e) { cancel(); }
+        };
+
+        styledText.addPaintListener(paintListener);
+        styledText.addVerifyKeyListener(keyListener);
+        styledText.addMouseListener(mouseListener);
+        document.addDocumentListener(docListener);
+    }
+
+    private void unhookListeners() {
+        if (styledText != null && !styledText.isDisposed()) {
+            if (paintListener != null) styledText.removePaintListener(paintListener);
+            if (keyListener != null) styledText.removeVerifyKeyListener(keyListener);
+            if (mouseListener != null) styledText.removeMouseListener(mouseListener);
+        }
+        if (document != null && docListener != null) document.removeDocumentListener(docListener);
+
+        paintListener = null;
+        keyListener = null;
+        docListener = null;
+        mouseListener = null;
+        suggestion = null;
+    }
+
+    private void drawGhost(GC gc, int startX, int startY) {
+        if (suggestion == null || suggestion.isEmpty()) return;
+
+        int oldAlpha = gc.getAlpha();
+        Color oldFg = gc.getForeground();
+        Font oldFont = gc.getFont();
+
+        gc.setAlpha(120);
+        gc.setForeground(ghostColor);
+        gc.setFont(styledText.getFont());
+
+        String normalized = suggestion.replace("\r\n", "\n").replace('\r', '\n');
+        String[] lines = normalized.split("\n", -1);
+
+        int lineHeight = styledText.getLineHeight();
+        int x = startX;
+        int y = startY;
+
+        int leftMargin = styledText.getLeftMargin();
+
+        for (String line : lines) {
+            if (!line.isEmpty()) gc.drawText(line, x, y, true);
+            y += lineHeight;
+            x = leftMargin;
+        }
+
+        gc.setFont(oldFont);
+        gc.setForeground(oldFg);
+        gc.setAlpha(oldAlpha);
+    }
+
+    private static int clamp(int v, int min, int max) {
+        return Math.max(min, Math.min(max, v));
+    }
+
+    public static StyledText getStyledText(ITextEditor editor) {
+        try {
+            ISourceViewer viewer = editor.getAdapter(ISourceViewer.class);
+            if (viewer != null && viewer.getTextWidget() != null && !viewer.getTextWidget().isDisposed()) {
+                return viewer.getTextWidget();
+            }
+        } catch (Exception ignore) {}
+
+        try {
+            Control c = editor.getAdapter(Control.class);
+            if (c instanceof StyledText) return (StyledText) c;
+            if (c instanceof Composite) return findStyledText((Composite) c);
+        } catch (Exception ignore) {}
+
+        return null;
+    }
+
+    public static StyledText findStyledText(Composite parent) {
+        for (Control child : parent.getChildren()) {
+            if (child instanceof StyledText) return (StyledText) child;
+            if (child instanceof Composite) {
+                StyledText st = findStyledText((Composite) child);
+                if (st != null) return st;
+            }
+        }
+        return null;
+    }
+
+    /** Ëøô‰∏™Êò†Â∞ÑÂú® ABIDE ÂèØËÉΩ‰∏çÂáÜÔºåÊâÄ‰ª•Âè™Áî®‰∫é‚ÄúÂ∞ΩÂäõËÄå‰∏∫‚ÄùÔºå‰∏çË¶Å‰Ωú‰∏∫ÂÖ≥ÈîÆÈÄªËæë‰æùËµñ */
+    public static int mapDocOffsetToWidgetOffset(ITextEditor editor, int docOffset) {
+        try {
+            ISourceViewer sv = editor.getAdapter(ISourceViewer.class);
+            if (sv == null) return docOffset;
+
+            if (sv instanceof ITextViewerExtension5) {
+                return ((ITextViewerExtension5) sv).modelOffset2WidgetOffset(docOffset);
+            }
+            return docOffset;
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+    
+    private void accept() {
+        if (!active) return;
+
+        final String insertText = suggestion;
+        final int insertModelOffset = anchorModelOffset;
+        final int insertLen = (insertText == null ? 0 : insertText.length());
+
+        cancel(); // ÂÖàÂèñÊ∂àÁõëÂê¨ÔºåÈÅøÂÖç docChanged ÈáçÂÖ•
+
+        try {
+            document.replace(insertModelOffset, 0, insertText);
+
+            final int newCaretModel = insertModelOffset + insertLen;
+
+            // ‚úÖ Âè™Áî® model/doc offset ÂÆö‰ΩçÂÖâÊ†áÔºà‰∏çË¶ÅÁ¢∞ StyledText caretÔºâ
+            selectAtModelOffset(editor, newCaretModel);
+
+            // ‚úÖ ABIDE Â∏∏‰ºöÂú®‰Ω†ËøôÊ≠•‰πãÂêéÂÜçÂêåÊ≠•‰∏ÄÊ¨° selection/revealÔºåÊâÄ‰ª•ÂÜç‚ÄúÂª∂Ëøü‰∫åÊ¨°ÂéãÂõûÂéª‚Äù
+            Display.getDefault().timerExec(0, () -> selectAtModelOffset(editor, newCaretModel));
+            Display.getDefault().timerExec(30, () -> selectAtModelOffset(editor, newCaretModel));
+
+        } catch (BadLocationException e) {
+            debug("Ghost: document.replace BadLocation: " + e.getMessage());
+        }
+    }
+
+    private static void selectAtModelOffset(ITextEditor editor, int modelOffset) {
+        try {
+            // ‰ºòÂÖàÁî® selectAndRevealÔºàËÆ© editor Ëá™Â∑±Â§ÑÁêÜ model->widget Êò†Â∞ÑÔºâ
+            editor.selectAndReveal(modelOffset, 0);
+        } catch (Exception ignore) {}
+
+        try {
+            if (editor.getSelectionProvider() != null) {
+                editor.getSelectionProvider().setSelection(new TextSelection(modelOffset, 0));
+            }
+        } catch (Exception ignore) {}
+    }
 }

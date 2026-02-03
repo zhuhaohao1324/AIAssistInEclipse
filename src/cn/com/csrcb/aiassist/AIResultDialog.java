@@ -75,7 +75,7 @@ public class AIResultDialog extends Dialog {
 		createButton(parent, 2001, "\u590D\u5236", false);
 
 		createButton(parent, 2002, "\u63D2\u5165\u5230\u5149\u6807\u5904", false);
-		createButton(parent, 2003, "\\u66FF\\u6362\\u9009\\u4E2D", false);
+		createButton(parent, 2003, "\u66FF\u6362\u9009\u4E2D", false);
 
 		createButton(parent, 2004, "\u63D2\u5165\u4E3A\u6CE8\u91CA", false);
 

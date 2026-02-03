@@ -44,8 +44,8 @@ public class AIHttpClient {
 
 	public static String callAICompletion(String contextText, int cursorInContext, IProgressMonitor monitor) {
 		// prompt：给补全用
-		String prompt = "" + "你是代码补全助手。根据上下文在光标位置继续补全代码。\n" + "只输出要插入的代码，不要解释，不要markdown。\n\n" + "【上下文】\n" + contextText
-				+ "\n" + "【光标位置】\n" + cursorInContext + "\n";
+		String prompt = "" + "你是java代码专家。根据上下文在光标位置继续补全可能需要的代码。" + "只输出要插入的代码，不要解释，不要markdown。最多补全2行代码" + "上下文为:" + contextText
+				+ "\n" + "光标位置在:" + cursorInContext + "\n";
 		return callAI(prompt, monitor);
 	}
 
@@ -74,7 +74,7 @@ public class AIHttpClient {
 
 			Map<String, String> systemMessage = new HashMap<String, String>();
 			systemMessage.put("role", "system");
-			systemMessage.put("content", "# 角色\n你是专业的Java代码专家，负责对用户问题进行准确回答。\n");
+			systemMessage.put("content", "你是专业的Java代码专家，负责对用户问题进行准确回答。\n");
 
 			Map<String, String> userMessage = new HashMap<String, String>();
 			userMessage.put("role", "user");
@@ -92,12 +92,13 @@ public class AIHttpClient {
 			try (OutputStream os = connection.getOutputStream()) {
 				byte[] input = jsonBody.getBytes("UTF-8");
 				os.write(input);
+				
 			}
-
+			System.out.print("send:"+jsonBody);
 			int code = connection.getResponseCode();
 			InputStream is = (code >= 200 && code < 300) ? connection.getInputStream() : connection.getErrorStream();
 			String resp = readAllUtf8(is);
-
+			System.out.print("recv:"+resp);
 			if (code < 200 || code >= 300) {
 				return "\n// AI HTTP error: " + code + "\n" + resp + "\n";
 			}
@@ -213,7 +214,7 @@ public class AIHttpClient {
 			item.put("max_tokens", 2048);
 
 			String jsonBody = GSON.toJson(item);
-
+			System.out.print("send:"+jsonBody);
 			try (OutputStream os = connection.getOutputStream()) {
 				os.write(jsonBody.getBytes("UTF-8"));
 			}
@@ -221,7 +222,7 @@ public class AIHttpClient {
 			int code = connection.getResponseCode();
 			InputStream is = (code >= 200 && code < 300) ? connection.getInputStream() : connection.getErrorStream();
 			String resp = readAllUtf8(is);
-
+			System.out.print("recv:"+resp);
 			if (code < 200 || code >= 300) {
 				return null; // 你也可以返回错误信息给 UI
 			}
