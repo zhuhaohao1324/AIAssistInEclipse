@@ -13,6 +13,9 @@ import org.eclipse.ui.texteditor.ITextEditor;
 
 public class AICompletionHandler extends AbstractHandler {
 
+    /** 正在进行的补全请求，用于去重 */
+    private static volatile String currentCompletionKey = null;
+
     @Override
     public Object execute(ExecutionEvent event) throws ExecutionException {
 
@@ -25,7 +28,7 @@ public class AICompletionHandler extends AbstractHandler {
         ITextSelection sel = (ITextSelection) editor.getSelectionProvider().getSelection();
         int offset = sel.getOffset();
 
-        // 1) 有选中：进入“提问/解释/生成”模式（保持你原来的逻辑）
+        // 1) 有选中：进入"提问/解释/生成"模式
         if (sel.getLength() > 0) {
             String selected = sel.getText();
 
@@ -37,7 +40,7 @@ public class AICompletionHandler extends AbstractHandler {
                     @Override
                     protected IStatus run(IProgressMonitor monitor) {
 
-                        String answer = AIHttpClient.callAIWithTimeout(prompt, 60_000, monitor);
+                        String answer = AIHttpClient.callAICachedWithTimeout(prompt, "ask_" + ask.mode.name(), 60_000, monitor);
 
                         Display.getDefault().asyncExec(() -> {
                             dialog.setSendEnabled(true);
@@ -62,11 +65,11 @@ public class AICompletionHandler extends AbstractHandler {
             return null;
         }
 
-        // 2) 没选中：进入 ghost 补全模式（关键：保存 + 延迟二次恢复）
+        // 2) 没选中：进入 ghost 补全模式（类似通义灵码：缓存优先 + 异步优化）
         try {
             final int triggerDocOffset = offset;
 
-            // ✅ 保存触发时 docOffset / widgetCaret（双保险）
+            // 保存触发时的caret位置
             final int[] triggerWidgetCaretBox = new int[] { -1 };
             Display.getDefault().syncExec(() -> {
                 StyledText st0 = GhostCompletionManager.getStyledText(editor);
@@ -75,60 +78,78 @@ public class AICompletionHandler extends AbstractHandler {
                 }
             });
             final int triggerWidgetCaret = triggerWidgetCaretBox[0];
-            int before = 400;  // 往前多给一点，包含变量/方法签名
-            int after  = 40;   // 往后很少，避免模型扩写
+
+            int before = 400;
+            int after  = 40;
             String contextText = ContextUtil.getContextWindow(doc, triggerDocOffset, before, after);
             int cursorInContext = ContextUtil.cursorInContext(doc, triggerDocOffset, before);
 
+            // 生成缓存key，用于去重
+            final String completionKey = AIHttpClient.getCacheKey(
+                "completion|" + contextText + "|" + cursorInContext, "completion");
+
+            // 如果有正在进行的相同请求，跳过
+            if (completionKey.equals(currentCompletionKey)) {
+                System.out.println("AICompletionHandler: 请求去重，跳过");
+                return null;
+            }
+            currentCompletionKey = completionKey;
+
+            // ===== 步骤1：先检查缓存，命中则立即显示 =====
+            String cachedResult = AIHttpClient.getCachedResult(completionKey);
+            if (cachedResult != null && !cachedResult.isEmpty()) {
+                System.out.println("AICompletionHandler: 缓存命中，立即显示！");
+                Display.getDefault().asyncExec(() -> {
+                    showGhostCompletion(editor, triggerDocOffset, triggerWidgetCaret, cachedResult);
+                });
+                // 继续后台调用AI更新缓存
+            } else {
+                // 缓存未命中，先尝试本地语法分析（立即响应）
+                System.out.println("AICompletionHandler: 缓存未命中，尝试本地语法分析...");
+                String localResult = LocalCodeAnalyzer.analyze(contextText, cursorInContext);
+                if (localResult != null && !localResult.isEmpty()) {
+                    System.out.println("AICompletionHandler: 本地分析成功，立即显示！");
+                    Display.getDefault().asyncExec(() -> {
+                        showGhostCompletion(editor, triggerDocOffset, triggerWidgetCaret, localResult);
+                    });
+                }
+            }
+
+            // ===== 步骤2：后台调用AI（无论缓存是否命中都调用，用于更新/优化结果） =====
             Job job = new Job("AI Assist Completion") {
                 @Override
                 protected IStatus run(IProgressMonitor monitor) {
+                    try {
+                        String aiResult = AIHttpClient.callAICompletion(contextText, cursorInContext, monitor);
 
-                    String aiResult = AIHttpClient.callAICompletion(contextText, cursorInContext, monitor);
-                    if (monitor.isCanceled())
-                        return Status.CANCEL_STATUS;
-
-                    Display.getDefault().asyncExec(() -> {
-                        if (aiResult == null || aiResult.trim().isEmpty())
-                            return;
-
-                        // 1️⃣ 用户在等待期间动过光标 -> 取消本次 ghost
-                        if (!isCaretStillAtDocOffset(editor, triggerDocOffset)) {
-                            System.out.println("Ghost canceled: caret moved (doc offset changed)");
-                            return;
+                        // 去重检查：确保这个结果还是给当前光标位置的
+                        if (!completionKey.equals(currentCompletionKey)) {
+                            System.out.println("AICompletionHandler: 光标已移动，丢弃结果");
+                            return Status.CANCEL_STATUS;
                         }
 
-                        StyledText st = GhostCompletionManager.getStyledText(editor);
-                        if (st == null || st.isDisposed())
-                            return;
+                        // 如果AI返回有效结果，更新显示
+                        if (aiResult != null && !aiResult.trim().isEmpty() && !aiResult.startsWith("\n// AI")) {
+                            // 光标已移动，丢弃结果
+                            if (!isCaretStillAtDocOffset(editor, triggerDocOffset)) {
+                                System.out.println("AICompletionHandler: caret moved, discard AI result");
+                                return Status.CANCEL_STATUS;
+                            }
 
-                        // === DEBUG：打印变化（你可以先观察到底是 caret 变还是视野变）===
-                        int beforeDoc = ((ITextSelection) editor.getSelectionProvider().getSelection()).getOffset();
-                        int beforeWidget = st.getCaretOffset();
-                        System.out.println("Before show: docOffset=" + beforeDoc + ", widgetCaret=" + beforeWidget);
+                            // 在UI线程更新显示
+                            final String finalAiResult = aiResult;
+                            Display.getDefault().asyncExec(() -> {
+                                showGhostCompletion(editor, triggerDocOffset, triggerWidgetCaret, finalAiResult);
+                            });
+                        }
 
-                        // 2️⃣ 展示 ghost（GhostCompletionManager 内部必须不要 setSelection/showSelection/topIndex）
-                        GhostCompletionManager.show(editor, triggerDocOffset, aiResult);
-
-                        // 3️⃣ 立即恢复一次
-                        restoreCaret(editor, st, triggerDocOffset, triggerWidgetCaret);
-
-                        // 4️⃣ ✅ 延迟再恢复一次：压过 Eclipse 后续 reveal/同步（非常关键）
-                        Display.getDefault().timerExec(20, () -> {
-                            if (st.isDisposed())
-                                return;
-                            restoreCaret(editor, st, triggerDocOffset, triggerWidgetCaret);
-
-                            int afterDoc = ((ITextSelection) editor.getSelectionProvider().getSelection()).getOffset();
-                            int afterWidget = st.getCaretOffset();
-                            System.out.println("After restore: docOffset=" + afterDoc + ", widgetCaret=" + afterWidget);
-                        });
-                    });
-
+                    } catch (Exception e) {
+                        System.out.println("AICompletionHandler: AI调用失败 " + e.getMessage());
+                    }
                     return Status.OK_STATUS;
                 }
             };
-            job.setUser(true);
+            job.setUser(false); // 不弹出进度条，更流畅
             job.schedule();
 
         } catch (Exception e) {
@@ -138,14 +159,44 @@ public class AICompletionHandler extends AbstractHandler {
         return null;
     }
 
+    /**
+     * 显示ghost补全（统一方法）
+     */
+    private void showGhostCompletion(ITextEditor editor, int triggerDocOffset,
+                                     int triggerWidgetCaret, String aiResult) {
+        if (aiResult == null || aiResult.trim().isEmpty())
+            return;
+
+        StyledText st = GhostCompletionManager.getStyledText(editor);
+        if (st == null || st.isDisposed())
+            return;
+
+        // 光标已移动则取消
+        if (!isCaretStillAtDocOffset(editor, triggerDocOffset)) {
+            System.out.println("Ghost canceled: caret moved");
+            return;
+        }
+
+        // 展示ghost
+        GhostCompletionManager.show(editor, triggerDocOffset, aiResult);
+
+        // 恢复光标位置
+        restoreCaret(editor, st, triggerDocOffset, triggerWidgetCaret);
+
+        // 延迟再恢复一次，防止被Eclipse覆盖
+        Display.getDefault().timerExec(20, () -> {
+            if (!st.isDisposed()) {
+                restoreCaret(editor, st, triggerDocOffset, triggerWidgetCaret);
+            }
+        });
+    }
+
     private static void restoreCaret(ITextEditor editor, StyledText st, int triggerDocOffset, int triggerWidgetCaret) {
         try {
-            // doc 侧恢复
             editor.getSelectionProvider().setSelection(new TextSelection(triggerDocOffset, 0));
         } catch (Exception ignore) {}
 
         try {
-            // widget 侧恢复（避免 viewer 同步导致 caret 跑）
             if (triggerWidgetCaret >= 0 && triggerWidgetCaret <= st.getCharCount()) {
                 st.setCaretOffset(triggerWidgetCaret);
                 st.setSelection(triggerWidgetCaret);
