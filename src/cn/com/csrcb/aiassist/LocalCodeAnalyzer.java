@@ -1,7 +1,5 @@
 package cn.com.csrcb.aiassist;
 
-import java.util.regex.Pattern;
-
 /**
  * Based on regex matching local code completion analyzer
  * Provides intelligent completion suggestions based on code structure when AI is unavailable
@@ -93,25 +91,25 @@ public class LocalCodeAnalyzer {
     private static String matchIfStatement(String line) {
         String trimmed = line.trim();
 
-        // if 单独输入 -> 补全为 if (condition) { }
+        // if 单独输入 -> 补全为 if (condition) { } else { }
         if (trimmed.equals("if") || trimmed.matches("if\\s*$")) {
-            return " (condition) {\n    \n}";
+            return " (condition) {\n    \n} else {\n    \n}";
         }
         // if( 或 if ( 缺少右括号 -> 补全右括号
         if (trimmed.matches("if\\s*\\(\\s*$")) {
-            return ") {\n    \n}";
+            return ") {\n    \n} else {\n    \n}";
         }
         // if () 括号内为空 -> 补全条件
         if (trimmed.matches("if\\s*\\(\\s*\\)\\s*$")) {
-            return ") {\n    // Code when condition is true\n}";
+            return ") {\n    // Code when condition is true\n} else {\n    // Code when condition is false\n}";
         }
         // if (something) -> 缺少右括号和代码块
         if (trimmed.matches("if\\s*\\([^)]+\\)\\s*$")) {
-            return ") {\n    \n}";
+            return ") {\n    \n} else {\n    \n}";
         }
         // if (condition) { -> 缺少代码和结束大括号
         if (trimmed.matches("if\\s*\\([^)]+\\)\\s*\\{\\s*$")) {
-            return "\n    // TODO\n}";
+            return "\n    // TODO\n} else {\n    // TODO\n}";
         }
         return null;
     }
@@ -346,14 +344,52 @@ public class LocalCodeAnalyzer {
         if (trimmed.matches("boolean\\s+\\w+$")) {
             return " = false;";
         }
-        if (trimmed.matches("List<\\w+>\\s+\\w+$")) {
-            return " = new ArrayList<>();";
-        }
+        // Map with generic
         if (trimmed.matches("Map<\\w+,\\s*\\w+>\\s+\\w+$")) {
             return " = new HashMap<>();";
         }
+        // Map without generic
+        if (trimmed.matches("Map\\s+\\w+$")) {
+            return " = new HashMap<>();";
+        }
+        // List with generic
+        if (trimmed.matches("List<\\w+>\\s+\\w+$")) {
+            return " = new ArrayList<>();";
+        }
+        // List without generic
+        if (trimmed.matches("List\\s+\\w+$")) {
+            return " = new ArrayList<>();";
+        }
+        // Set with generic
         if (trimmed.matches("Set<\\w+>\\s+\\w+$")) {
             return " = new HashSet<>();";
+        }
+        // Set without generic
+        if (trimmed.matches("Set\\s+\\w+$")) {
+            return " = new HashSet<>();";
+        }
+        // HashMap with generic
+        if (trimmed.matches("HashMap<\\w+,\\s*\\w+>\\s+\\w+$")) {
+            return " = new HashMap<>();";
+        }
+        // HashMap without generic
+        if (trimmed.matches("HashMap\\s+\\w+$")) {
+            return " = new HashMap<>();";
+        }
+        // ArrayList
+        if (trimmed.matches("ArrayList<\\w+>\\s+\\w+$")) {
+            return " = new ArrayList<>();";
+        }
+        if (trimmed.matches("ArrayList\\s+\\w+$")) {
+            return " = new ArrayList<>();";
+        }
+        // Object
+        if (trimmed.matches("Object\\s+\\w+$")) {
+            return " = null;";
+        }
+        // Date
+        if (trimmed.matches("Date\\s+\\w+$")) {
+            return " = new Date();";
         }
         return null;
     }
@@ -383,10 +419,10 @@ public class LocalCodeAnalyzer {
     private static String matchLogger(String line) {
         String trimmed = line.trim();
 
-        if (trimmed.matches("(logger|log)\\.\\s*$")) {
+        if (trimmed.matches("(LogUtil|Log)\\.\\s*$")) {
             return "debug(\"\");\ninfo(\"\");\nwarn(\"\");\nerror(\"\");";
         }
-        if (trimmed.matches("(logger|log)\\.\\w+$")) {
+        if (trimmed.matches("(LogUtil|Log)\\.\\w+$")) {
             return "(\"\");";
         }
         return null;

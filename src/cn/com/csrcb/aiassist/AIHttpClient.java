@@ -1,6 +1,9 @@
 package cn.com.csrcb.aiassist;
 
 import com.google.gson.Gson;
+
+import cn.com.csrcb.aiassist.PromptTemplates.SelectionMode;
+
 import org.eclipse.core.runtime.IProgressMonitor;
 
 import java.io.*;
@@ -10,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class AIHttpClient {
@@ -56,8 +60,99 @@ public class AIHttpClient {
         }
     }
 
-    private static String getCacheKeyInternal(String prompt, String mode) {
-        return md5(mode + "|" + prompt);
+    /**
+     * 生成语义化缓存Key，提高缓存命中率
+     * 方案：基于代码结构特征而非完整文本
+     */
+    public static String generateSemanticCacheKey(String contextText, int cursorInContext) {
+        StringBuilder key = new StringBuilder();
+        
+        // 1. 提取当前行内容（去空格）
+        String currentLine = getCurrentLine(contextText, cursorInContext);
+        String normalizedLine = currentLine.trim().replaceAll("\\s+", " ");
+        key.append("line:").append(normalizedLine).append("|");
+        
+        // 2. 提取当前方法名（向上查找方法定义）
+        String methodName = extractCurrentMethodName(contextText, cursorInContext);
+        key.append("method:").append(methodName != null ? methodName : "unknown").append("|");
+        
+        // 3. 提取当前类名
+        String className = extractCurrentClassName(contextText, cursorInContext);
+        key.append("class:").append(className != null ? className : "unknown").append("|");
+        
+        // 4. 当前行在方法内的相对位置（行号）
+        int lineNumberInMethod = getLineNumberInCurrentScope(contextText, cursorInContext);
+        key.append("lineNum:").append(lineNumberInMethod);
+        
+        return "completion|" + md5(key.toString());
+    }
+    
+    /**
+     * 提取当前方法名
+     */
+    private static String extractCurrentMethodName(String text, int cursorPos) {
+        // 匹配方法定义：返回类型 方法名(参数)
+        Pattern methodPattern = Pattern.compile("(public|private|protected)?\\s*(static)?\\s*\\w+\\s+(\\w+)\\s*\\([^)]*\\)\\s*\\{?");
+        int searchStart = Math.max(0, cursorPos - 500);
+        String searchText = text.substring(searchStart, cursorPos);
+        
+        String[] lines = searchText.split("\n");
+        for (int i = lines.length - 1; i >= 0; i--) {
+            Matcher matcher = methodPattern.matcher(lines[i].trim());
+            if (matcher.find()) {
+                return matcher.group(3);
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * 提取当前类名
+     */
+    private static String extractCurrentClassName(String text, int cursorPos) {
+        Pattern classPattern = Pattern.compile("class\\s+(\\w+)");
+        int searchStart = Math.max(0, cursorPos - 2000);
+        String searchText = text.substring(searchStart, cursorPos);
+        
+        Matcher matcher = classPattern.matcher(searchText);
+        String lastClass = null;
+        while (matcher.find()) {
+            lastClass = matcher.group(1);
+        }
+        return lastClass;
+    }
+    
+    /**
+     * 获取当前行
+     */
+    private static String getCurrentLine(String text, int cursorPos) {
+        int lineStart = cursorPos;
+        while (lineStart > 0 && text.charAt(lineStart - 1) != '\n') {
+            lineStart--;
+        }
+        return text.substring(lineStart, cursorPos);
+    }
+    
+    /**
+     * 获取当前作用域内的相对行号（用于区分同一方法的不同位置）
+     */
+    private static int getLineNumberInCurrentScope(String text, int cursorPos) {
+        int lineStart = cursorPos;
+        while (lineStart > 0 && text.charAt(lineStart - 1) != '\n') {
+            lineStart--;
+        }
+        // 统计前面有多少个 {
+        String beforeText = text.substring(0, lineStart);
+        int braceCount = countOccurrences(beforeText, '{') - countOccurrences(beforeText, '}');
+        return braceCount;
+    }
+    
+    private static int countOccurrences(String str, char c) {
+        int count = 0;
+        for (char ch : str.toCharArray()) {
+            if (ch == c) count++;
+        }
+        return count;
     }
 
     private static String getFromCache(String cacheKey) {
@@ -223,13 +318,15 @@ public class AIHttpClient {
     }
 
     public static String callAICompletion(String contextText, int cursorInContext, IProgressMonitor monitor) {
-        String prompt = "你是java代码专家。根据上下文在光标位置继续补全可能需要的代码。只输出要插入的代码，不要解释，不要markdown。最多补全2行代码。上下文为:" + contextText + "\n光标位置在:" + cursorInContext + "\n";
-
-        String cacheKey = getCacheKey(prompt, "completion");
+        // 使用语义化缓存Key
+        String cacheKey = generateSemanticCacheKey(contextText, cursorInContext);
+        
         String cached = getFromCache(cacheKey);
         if (cached != null) {
             return cached;
         }
+
+        String prompt = "你是java代码专家。根据上下文在光标位置继续补全可能需要的代码。只输出要插入的代码，不要解释，不要markdown。最多补全2行代码。上下文为:" + contextText + "\n光标位置在:" + cursorInContext + "\n";
 
         String result = callAI(prompt, monitor);
         if (result != null && !result.startsWith("\n// AI")) {
@@ -325,14 +422,14 @@ public class AIHttpClient {
         }
     }
 
-    public static String callAIWithTimeout(String prompt, int timeoutMs, IProgressMonitor monitor) {
+    public static String callAIWithTimeout(String prompt, int timeoutMs, IProgressMonitor monitor,String cacheMode) {
         HttpURLConnection connection = null;
         try {
             if (monitor != null && monitor.isCanceled())
                 return null;
 
-            String urlStr = "http://170.100.147.31:8080/v1/completions";
-            String apiKey = "f6173988-16ff-4ba4-9aa8-0a44eb1c341c";
+            String urlStr = "http://170.100.147.39:3000/api/flow/instance/run";
+            String apiKey = "L4qwNHDzdpdVxQ0A9rblTs0DHmX5z2KCk55S77rq30yp3C7N";
 
             URL url = new URL(urlStr);
             connection = (HttpURLConnection) url.openConnection();
@@ -346,20 +443,39 @@ public class AIHttpClient {
 
             Map<String, Object> item = new HashMap<String, Object>();
             Map<String, String> userMessage = new HashMap<String, String>();
-            String system_prompt = "# 角色 你现在是专业的java代码专家，你的核心职责对于询问的java代码问题进行解答。\n";
-
-            userMessage.put("role", "user");
-            userMessage.put("content", prompt);
-
-            Map<String, String> systemMessage = new HashMap<String, String>();
-            systemMessage.put("role", "system");
-            systemMessage.put("content", system_prompt);
-
-            item.put("messages", new Object[] { userMessage, systemMessage });
-            item.put("temperature", 0);
-            item.put("model", "Qwen3-235B");
-            item.put("max_tokens", 2048);
-
+//            String system_prompt = "# 角色 你现在是专业的java代码专家，你的核心职责对于询问的java代码问题进行解答。\n";
+//
+//            userMessage.put("role", "user");
+//            userMessage.put("content", prompt);
+//
+//            Map<String, String> systemMessage = new HashMap<String, String>();
+//            systemMessage.put("role", "system");
+//            systemMessage.put("content", system_prompt);
+//
+//            item.put("messages", new Object[] { userMessage, systemMessage });
+//            item.put("temperature", 0);
+//            item.put("model", "Qwen3-235B");
+//            item.put("max_tokens", 2048);
+            item.put("flowId","prwx4led46");
+            item.put("threadId",null);
+            userMessage.put("USER_INPUT", prompt);
+            String questionType ="generateCode";
+            System.out.print("zzzz"+cacheMode);
+            System.out.print("111111\n");
+            if(cacheMode.length()>=4) {
+            	questionType =cacheMode.replace("ask_", "");
+            	if("GENERATE_CODE".equals(questionType)) {
+            		questionType="generateCode";
+            	}else if("EXPLAIN_CN".equals(questionType)) {
+            		questionType="summary";
+            	}else if ("REFACTOR".equals(questionType)){
+            		questionType="refactor";
+            	}else {
+            		questionType="generateCode";
+            	}
+            }
+            userMessage.put("questionType", questionType);
+            item.put("inputs",userMessage);
             String jsonBody = GSON.toJson(item);
             System.out.print("send:"+jsonBody);
             try (OutputStream os = connection.getOutputStream()) {
@@ -412,7 +528,7 @@ public class AIHttpClient {
             return cached;
         }
 
-        String result = callAIWithTimeout(prompt, timeoutMs, monitor);
+        String result = callAIWithTimeout(prompt, timeoutMs, monitor,cacheMode);
         if (result != null) {
             putToCache(cacheKey, result);
         }

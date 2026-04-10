@@ -84,9 +84,8 @@ public class AICompletionHandler extends AbstractHandler {
             String contextText = ContextUtil.getContextWindow(doc, triggerDocOffset, before, after);
             int cursorInContext = ContextUtil.cursorInContext(doc, triggerDocOffset, before);
 
-            // 生成缓存key，用于去重
-            final String completionKey = AIHttpClient.getCacheKey(
-                "completion|" + contextText + "|" + cursorInContext, "completion");
+            // 使用语义化缓存Key，提高缓存命中率
+            final String completionKey = AIHttpClient.generateSemanticCacheKey(contextText, cursorInContext);
 
             // 如果有正在进行的相同请求，跳过
             if (completionKey.equals(currentCompletionKey)) {

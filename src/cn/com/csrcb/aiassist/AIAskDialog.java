@@ -72,9 +72,9 @@ public class AIAskDialog extends Dialog {
 		modeLabel.setText("\u6A21\u5F0F\uFF1A"); // 模式：
 		modeCombo = new Combo(c, SWT.DROP_DOWN | SWT.READ_ONLY);
 		modeCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-		modeCombo.setItems(new String[] { "\u4E2D\u6587\u89E3\u91CA", // 中文解释
-				"\u4E2D\u6587\u603B\u7ED3", // 中文总结
-				"\u751F\u6210\u4EE3\u7801", // 生成代码
+		modeCombo.setItems(new String[] { "\u751F\u6210\u4EE3\u7801", // 生成代码
+				"\u4E2D\u6587\u89E3\u91CA", // 中文解释
+				"\u4E2D\u6587\u603B\u7ED3", // 中文总结			
 				"\u91CD\u6784\u5EFA\u8BAE" // 重构建议
 		});
 		modeCombo.select(0);
@@ -164,15 +164,15 @@ public class AIAskDialog extends Dialog {
 	private static SelectionMode toMode(int idx) {
 		switch (idx) {
 		case 0:
-			return SelectionMode.EXPLAIN_CN;
-		case 1:
-			return SelectionMode.SUMMARIZE_CN;
-		case 2:
 			return SelectionMode.GENERATE_CODE;
+		case 1:
+			return SelectionMode.EXPLAIN_CN;
+		case 2:
+			return SelectionMode.SUMMARIZE_CN;
 		case 3:
 			return SelectionMode.REFACTOR;
 		default:
-			return SelectionMode.EXPLAIN_CN;
+			return SelectionMode.GENERATE_CODE;
 		}
 	}
 

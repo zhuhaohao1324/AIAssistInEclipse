@@ -3,9 +3,9 @@ package cn.com.csrcb.aiassist;
 public class PromptTemplates {
 
 	public enum SelectionMode {
+		GENERATE_CODE, // 根据提问生成代码（通常替换选中或插入）
 		EXPLAIN_CN, // 中文解释代码含义
 		SUMMARIZE_CN, // 中文总结（更短）
-		GENERATE_CODE, // 根据提问生成代码（通常替换选中或插入）
 		REFACTOR // 重构/优化建议
 	}
 
