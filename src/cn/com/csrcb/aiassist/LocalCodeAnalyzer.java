@@ -1,26 +1,21 @@
 package cn.com.csrcb.aiassist;
 
-/**
- * Based on regex matching local code completion analyzer
- * Provides intelligent completion suggestions based on code structure when AI is unavailable
- * 
- * No JDT dependency, pure string analysis, fast response
- */
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+import java.util.ArrayList;
+import java.util.List;
+
 public class LocalCodeAnalyzer {
 
-    /**
-     * Analyze context and generate completion suggestions
-     * @param contextText Code context before and after cursor
-     * @param cursorInContext Cursor position in context
-     * @return Suggested code completion, or null if no completion available
-     */
+    private static final Pattern VAR_DECL_PATTERN = Pattern.compile(
+        "(String|int|Integer|long|double|boolean|Map|List|Set|HashMap|ArrayList|Object|Date|\\w+)\\s+(\\w+)\\s*(=\\s*[^;]+)?");
+
     public static String analyze(String contextText, int cursorInContext) {
         if (contextText == null || contextText.isEmpty()) {
             return null;
         }
 
-        // Get current line
-        int lineStart = getLineStart(contextText, cursorInContext);
+        int lineStart = findLineStart(contextText, cursorInContext);
         String currentLine = contextText.substring(lineStart, cursorInContext);
         String trimmed = currentLine.trim();
 
@@ -28,13 +23,14 @@ public class LocalCodeAnalyzer {
             return null;
         }
 
-        // Match code patterns by priority
+        ContextVariables vars = extractContextVariables(contextText, lineStart);
+
         String suggestion = null;
 
-        suggestion = matchIfStatement(trimmed);
+        suggestion = matchIfStatement(trimmed, vars);
         if (suggestion != null) return suggestion;
 
-        suggestion = matchForLoop(trimmed);
+        suggestion = matchForLoop(trimmed, vars);
         if (suggestion != null) return suggestion;
 
         suggestion = matchWhileLoop(trimmed);
@@ -64,7 +60,7 @@ public class LocalCodeAnalyzer {
         suggestion = matchObjectCreation(trimmed);
         if (suggestion != null) return suggestion;
 
-        suggestion = matchVariableDeclaration(trimmed);
+        suggestion = matchVariableDeclaration(trimmed, vars);
         if (suggestion != null) return suggestion;
 
         suggestion = matchReturn(trimmed);
@@ -85,65 +81,152 @@ public class LocalCodeAnalyzer {
         suggestion = matchDoWhile(trimmed);
         if (suggestion != null) return suggestion;
 
+        suggestion = matchNullCheck(trimmed, vars);
+        if (suggestion != null) return suggestion;
+
+        suggestion = matchMethodChain(trimmed, vars);
+        if (suggestion != null) return suggestion;
+
+        suggestion = matchSwitchEnhanced(trimmed, vars);
+        if (suggestion != null) return suggestion;
+
+        suggestion = matchEnhancedTry(trimmed, vars);
+        if (suggestion != null) return suggestion;
+
+        suggestion = matchQuickTemplate(trimmed, vars);
+        if (suggestion != null) return suggestion;
+
+        suggestion = matchStreamAPI(trimmed, vars);
+        if (suggestion != null) return suggestion;
+
+        suggestion = matchLambdaShortcut(trimmed, vars);
+        if (suggestion != null) return suggestion;
+
         return null;
     }
 
-    private static String matchIfStatement(String line) {
+    static class ContextVariables {
+        List<String> strings = new ArrayList<>();
+        List<String> ints = new ArrayList<>();
+        List<String> bools = new ArrayList<>();
+        List<String> objects = new ArrayList<>();
+        List<String> maps = new ArrayList<>();
+        List<String> lists = new ArrayList<>();
+        List<String> collections = new ArrayList<>();
+
+        String suggestCondition() {
+            if (!strings.isEmpty()) {
+                for (String s : strings) {
+                    if (s.length() > 2) {
+                        return "!" + s + ".isEmpty()";
+                    }
+                }
+                return "!" + strings.get(0) + ".isEmpty()";
+            }
+            if (!objects.isEmpty()) {
+                return objects.get(0) + " != null";
+            }
+            if (!bools.isEmpty()) {
+                return bools.get(0);
+            }
+            if (!ints.isEmpty()) {
+                return ints.get(0) + " > 0";
+            }
+            return "condition";
+        }
+
+        String getFirstObject() {
+            if (!objects.isEmpty()) return objects.get(0);
+            if (!lists.isEmpty()) return lists.get(0);
+            if (!maps.isEmpty()) return maps.get(0);
+            return "obj";
+        }
+
+        String getFirstList() {
+            if (!lists.isEmpty()) return lists.get(0);
+            if (!collections.isEmpty()) return collections.get(0);
+            return "list";
+        }
+    }
+
+    static ContextVariables extractContextVariables(String text, int lineStart) {
+        ContextVariables vars = new ContextVariables();
+        String beforeText = text.substring(0, lineStart);
+
+        Matcher matcher = VAR_DECL_PATTERN.matcher(beforeText);
+        while (matcher.find()) {
+            String type = matcher.group(1);
+            String varName = matcher.group(2);
+
+            if (type.equals("String")) {
+                vars.strings.add(varName);
+            } else if (type.equals("int") || type.equals("Integer")) {
+                vars.ints.add(varName);
+            } else if (type.equals("boolean")) {
+                vars.bools.add(varName);
+            } else if (type.equals("Map") || type.equals("HashMap")) {
+                vars.maps.add(varName);
+            } else if (type.equals("List") || type.equals("ArrayList")) {
+                vars.lists.add(varName);
+            } else if (type.equals("Set") || type.equals("HashSet")) {
+                vars.collections.add(varName);
+            } else {
+                vars.objects.add(varName);
+            }
+        }
+
+        return vars;
+    }
+
+    private static int findLineStart(String text, int pos) {
+        int start = pos;
+        while (start > 0 && text.charAt(start - 1) != '\n') {
+            start--;
+        }
+        return start;
+    }
+
+    private static String matchIfStatement(String line, ContextVariables vars) {
         String trimmed = line.trim();
 
-        // if 单独输入 -> 补全为 if (condition) { } else { }
         if (trimmed.equals("if") || trimmed.matches("if\\s*$")) {
-            return " (condition) {\n    \n} else {\n    \n}";
+            return " (" + vars.suggestCondition() + ") {\n    \n} else {\n    \n}";
         }
-        // if( 或 if ( 缺少右括号 -> 补全右括号
         if (trimmed.matches("if\\s*\\(\\s*$")) {
-            return ") {\n    \n} else {\n    \n}";
+            return vars.suggestCondition() + ") {\n    \n} else {\n    \n}";
         }
-        // if () 括号内为空 -> 补全条件
         if (trimmed.matches("if\\s*\\(\\s*\\)\\s*$")) {
-            return ") {\n    // Code when condition is true\n} else {\n    // Code when condition is false\n}";
+            return ") {\n    \n} else {\n    // TODO\n}";
         }
-        // if (something) -> 缺少右括号和代码块
         if (trimmed.matches("if\\s*\\([^)]+\\)\\s*$")) {
             return ") {\n    \n} else {\n    \n}";
         }
-        // if (condition) { -> 缺少代码和结束大括号
         if (trimmed.matches("if\\s*\\([^)]+\\)\\s*\\{\\s*$")) {
             return "\n    // TODO\n} else {\n    // TODO\n}";
         }
         return null;
     }
 
-    private static String matchForLoop(String line) {
+    private static String matchForLoop(String line, ContextVariables vars) {
         String trimmed = line.trim();
 
-        // for 单独输入 -> 补全为 for (int i = 0; i < size; i++)
         if (trimmed.equals("for") || trimmed.matches("for\\s*$")) {
+            if (!vars.lists.isEmpty()) {
+                return " (Object item : " + vars.lists.get(0) + ") {\n    \n}";
+            }
+            if (!vars.maps.isEmpty()) {
+                return " (Map.Entry<String, Object> entry : " + vars.maps.get(0) + ".entrySet()) {\n    String key = entry.getKey();\n    Object value = entry.getValue();\n    \n}";
+            }
+            if (!vars.collections.isEmpty()) {
+                return " (Object item : " + vars.collections.get(0) + ") {\n    \n}";
+            }
             return " (int i = 0; i < size; i++) {\n    \n}";
         }
-        // for( 或 for ( -> 缺少右括号
         if (trimmed.matches("for\\s*\\(\\s*$")) {
             return ") {\n    \n}";
         }
-        // for () -> 括号内为空
-        if (trimmed.matches("for\\s*\\(\\s*\\)\\s*$")) {
-            return " (int i = 0; i < size; i++) {\n    \n}";
-        }
-        // for (int i = 0; -> 缺少结束
-        if (trimmed.matches("for\\s*\\(\\s*int\\s+\\w+\\s*=\\s*0\\s*;.*$")) {
-            return "; i < list.size(); i++) {\n    Object item = list.get(i);\n    \n}";
-        }
-        // foreach: for (item : collection)
-        if (trimmed.matches("for\\s*\\(\\s*\\w+\\s*:\\s*\\w+\\)\\s*$")) {
+        if (trimmed.matches("for\\s*\\(.*\\)\\s*$")) {
             return ") {\n    \n}";
-        }
-        // for (i = 0; i < 10; -> 缺少步进
-        if (trimmed.matches("for\\s*\\([^;]+;\\s*\\)\\s*$")) {
-            return "; i < length; i++) {\n    \n}";
-        }
-        // for (condition; -> 缺少条件判断和步进
-        if (trimmed.matches("for\\s*\\([^;]+\\s*$")) {
-            return "; i < size; i++) {\n    \n}";
         }
         return null;
     }
@@ -151,19 +234,12 @@ public class LocalCodeAnalyzer {
     private static String matchWhileLoop(String line) {
         String trimmed = line.trim();
 
-        // while 单独输入
         if (trimmed.equals("while") || trimmed.matches("while\\s*$")) {
             return " (condition) {\n    \n}";
         }
-        // while( 或 while (
         if (trimmed.matches("while\\s*\\(\\s*$")) {
             return ") {\n    \n}";
         }
-        // while () 括号内为空
-        if (trimmed.matches("while\\s*\\(\\s*\\)\\s*$")) {
-            return " (condition) {\n    \n}";
-        }
-        // while (condition)
         if (trimmed.matches("while\\s*\\([^)]+\\)\\s*$")) {
             return ") {\n    \n}";
         }
@@ -173,13 +249,11 @@ public class LocalCodeAnalyzer {
     private static String matchTryStatement(String line) {
         String trimmed = line.trim();
 
-        // try 单独输入
         if (trimmed.equals("try") || trimmed.matches("try\\s*$")) {
-            return " {\n    // Code that may throw exception\n} catch (Exception e) {\n    e.printStackTrace();\n}";
+            return " {\n    \n} catch (Exception e) {\n    e.printStackTrace();\n}";
         }
-        // try {
-        if (trimmed.matches("try\\s*\\{\\s*$")) {
-            return "\n    // Code that may throw exception\n} catch (Exception e) {\n    e.printStackTrace();\n}";
+        if (trimmed.matches("try\\s*\\(\\s*$")) {
+            return ") {\n    \n} catch (Exception e) {\n    e.printStackTrace();\n}";
         }
         return null;
     }
@@ -187,19 +261,9 @@ public class LocalCodeAnalyzer {
     private static String matchSwitchStatement(String line) {
         String trimmed = line.trim();
 
-        // switch 单独输入
         if (trimmed.equals("switch") || trimmed.matches("switch\\s*$")) {
             return " (value) {\n    case :\n        break;\n    default:\n        break;\n}";
         }
-        // switch(
-        if (trimmed.matches("switch\\s*\\(\\s*$")) {
-            return "value) {\n    case :\n        break;\n    default:\n        break;\n}";
-        }
-        // switch ()
-        if (trimmed.matches("switch\\s*\\(\\s*\\)\\s*$")) {
-            return " (value) {\n    case value1:\n        break;\n    case value2:\n        break;\n    default:\n        break;\n}";
-        }
-        // switch (value)
         if (trimmed.matches("switch\\s*\\([^)]+\\)\\s*$")) {
             return ") {\n    case :\n        break;\n    default:\n        break;\n}";
         }
@@ -209,21 +273,17 @@ public class LocalCodeAnalyzer {
     private static String matchMethodDefinition(String line) {
         String trimmed = line.trim();
 
-        // void methodName()
-        if (trimmed.matches("\\w+\\s+\\w+\\s*\\(\\s*\\)\\s*$")) {
+        if (trimmed.matches("public void \\w+\\s*$")) {
+            return " () {\n    \n}";
+        }
+        if (trimmed.matches("public \\w+ \\w+\\s*$")) {
+            return " () {\n    \n}";
+        }
+        if (trimmed.matches("private void \\w+\\s*$")) {
+            return " () {\n    \n}";
+        }
+        if (trimmed.matches("\\w+ \\w+ *\\([^)]*\\)\\s*$")) {
             return " {\n    \n}";
-        }
-        // void methodName() {
-        if (trimmed.matches("\\w+\\s+\\w+\\s*\\(\\s*\\)\\s*\\{\\s*$")) {
-            return "\n    // TODO: Implement method\n}";
-        }
-        // ReturnType methodName(params)
-        if (trimmed.matches("\\w+\\s+\\w+\\s*\\([^)]*\\)\\s*$") && !trimmed.contains("class ")) {
-            return " {\n    \n}";
-        }
-        // ReturnType methodName(params) {
-        if (trimmed.matches("\\w+\\s+\\w+\\s*\\([^)]*\\)\\s*\\{\\s*$")) {
-            return "\n    // TODO\n}";
         }
         return null;
     }
@@ -231,11 +291,13 @@ public class LocalCodeAnalyzer {
     private static String matchConstructor(String line) {
         String trimmed = line.trim();
 
-        if (!trimmed.startsWith("void ") && !trimmed.startsWith("int ") &&
-            !trimmed.startsWith("String ") && !trimmed.startsWith("boolean ") &&
-            !trimmed.startsWith("double ") && !trimmed.startsWith("long ") &&
-            trimmed.matches("\\w+\\s*\\([^)]*\\)\\s*$")) {
-            return " {\n    super();\n    // Initialization code\n}";
+        if (trimmed.matches("public \\w+\\s*$")) {
+            return " () {\n    \n}";
+        }
+        if (trimmed.matches("\\w+\\s*\\([^)]*\\)\\s*$")) {
+            if (!trimmed.contains("void")) {
+                return " {\n    \n}";
+            }
         }
         return null;
     }
@@ -243,14 +305,8 @@ public class LocalCodeAnalyzer {
     private static String matchClassDefinition(String line) {
         String trimmed = line.trim();
 
-        if (trimmed.matches("class\\s+\\w+\\s*$")) {
-            return " {\n    // Member variables\n    // Constructors\n    // Member methods\n}";
-        }
-        if (trimmed.matches("class\\s+\\w+\\s+extends\\s+\\w+\\s*$")) {
-            return " {\n    // Override parent methods\n}";
-        }
-        if (trimmed.matches("class\\s+\\w+\\s+implements\\s+\\w+\\s*$")) {
-            return " {\n    // Implement interface methods\n}";
+        if (trimmed.matches("class \\w+\\s*$")) {
+            return " {\n    \n}";
         }
         return null;
     }
@@ -258,24 +314,21 @@ public class LocalCodeAnalyzer {
     private static String matchOverride(String line) {
         String trimmed = line.trim();
 
-        if (trimmed.matches("@Override\\s*$")) {
-            return "\npublic void methodName() {\n    super.methodName();\n}";
+        if (trimmed.equals("@Override")) {
+            return "\npublic void ";
         }
         return null;
     }
-
+    
     private static String matchMethodCall(String line) {
         String trimmed = line.trim();
 
-        // obj.
         if (trimmed.matches("\\w+\\.\\s*$")) {
             return getCommonMethods(trimmed.replaceFirst("\\.\\s*$", ""));
         }
-        // obj.method
         if (trimmed.matches("\\w+\\.\\w+$")) {
             return "();";
         }
-        // obj.method(
         if (trimmed.matches("\\w+\\.\\w+\\([^)]*$")) {
             return ");";
         }
@@ -284,52 +337,59 @@ public class LocalCodeAnalyzer {
 
     private static String getCommonMethods(String obj) {
         String lower = obj.toLowerCase();
-        switch (lower) {
-            case "list":
-            case "arraylist":
-                return "add();\nclear();\nget();\nisEmpty();\nremove();\nsize();";
-            case "map":
-            case "hashmap":
-                return "get();\nput();\ncontainsKey();\nisEmpty();\nremove();\nsize();";
-            case "set":
-            case "hashset":
-                return "add();\nclear();\ncontains();\nisEmpty();\nremove();\nsize();";
-            case "string":
-                return "trim();\nisEmpty();\nlength();\nsubstring();\ntoString();";
-            case "logger":
-            case "log":
-                return "debug(\"\");\ninfo(\"\");\nwarn(\"\");\nerror(\"\");";
-            case "sb":
-            case "stringbuilder":
-                return "append(\"\");\ntoString();\nlength();\ndelete();";
-            default:
-                return "toString();\nequals();\nhashCode();";
+        if ("list".equals(lower) || "arraylist".equals(lower)) {
+            return "add();\nclear();\nget();\nisEmpty();\nremove();\nsize();";
         }
+        if ("map".equals(lower) || "hashmap".equals(lower)) {
+            return "get();\nput();\ncontainsKey();\nisEmpty();\nremove();\nsize();";
+        }
+        if ("set".equals(lower) || "hashset".equals(lower)) {
+            return "add();\nclear();\ncontains();\nisEmpty();\nremove();\nsize();";
+        }
+        if ("string".equals(lower)) {
+            return "trim();\nisEmpty();\nlength();\nsubstring();\ntoString();";
+        }
+        if ("logger".equals(lower) || "log".equals(lower)) {
+            return "debug(\"\");\ninfo(\"\");\nwarn(\"\");\nerror(\"\");";
+        }
+        if ("sb".equals(lower) || "stringbuilder".equals(lower)) {
+            return "append(\"\");\ntoString();\nlength();\ndelete();";
+        }
+        return "toString();\nequals();\nhashCode();";
     }
 
     private static String matchObjectCreation(String line) {
         String trimmed = line.trim();
 
-        if (trimmed.matches("new\\s+\\w+$")) {
-            String className = trimmed.replaceFirst("new\\s+", "");
-            return className + "();";
+        if (trimmed.matches("new \\w+$")) {
+            return trimmed.replaceFirst("new ", "") + "();";
         }
-        if (trimmed.matches("new\\s+\\w+\\([^)]*$")) {
+        if (trimmed.matches("new \\w+\\([^)]*$")) {
             return ");";
         }
-        if (trimmed.matches("new\\s+ArrayList<>?\\s*$")) {
+        if (trimmed.matches("new ArrayList<>?\\s*$")) {
             return "();";
         }
-        if (trimmed.matches("new\\s+HashMap<>?\\s*$")) {
+        if (trimmed.matches("new HashMap<>?\\s*$")) {
             return "();";
         }
         return null;
     }
 
-    private static String matchVariableDeclaration(String line) {
+    private static String matchVariableDeclaration(String line, ContextVariables vars) {
         String trimmed = line.trim();
 
-        if (trimmed.matches("String\\s+\\w+$")) {
+        String varName = trimmed.replaceFirst("^(String|int|Integer|long|double|boolean|Map|HashMap|List|ArrayList|Set|HashSet|Object|Date)\\s+", "");
+        String lowerName = varName.toLowerCase();
+
+        boolean isListVar = lowerName.contains("list") || lowerName.contains("array") || lowerName.contains("items");
+        boolean isMapVar = lowerName.contains("map") || lowerName.contains("dict");
+        boolean isSetVar = lowerName.contains("set");
+        boolean isStrVar = lowerName.contains("name") || lowerName.contains("str") || lowerName.contains("text") || lowerName.contains("msg");
+        boolean isBoolVar = lowerName.contains("flag") || lowerName.contains("valid") || lowerName.contains("enable") || lowerName.contains("active") || lowerName.startsWith("is") || lowerName.startsWith("has") || lowerName.startsWith("can");
+        boolean isDateVar = lowerName.contains("date") || lowerName.contains("time") || lowerName.endsWith("at") || lowerName.endsWith("time");
+
+        if (trimmed.matches("String\\s+\\w+$") || (isStrVar && !trimmed.contains("List"))) {
             return " = \"\";";
         }
         if (trimmed.matches("int\\s+\\w+$") || trimmed.matches("Integer\\s+\\w+$")) {
@@ -341,55 +401,23 @@ public class LocalCodeAnalyzer {
         if (trimmed.matches("double\\s+\\w+$")) {
             return " = 0.0;";
         }
-        if (trimmed.matches("boolean\\s+\\w+$")) {
+        if (trimmed.matches("boolean\\s+\\w+$") || isBoolVar) {
             return " = false;";
         }
-        // Map with generic
-        if (trimmed.matches("Map<\\w+,\\s*\\w+>\\s+\\w+$")) {
+        if (trimmed.matches("Map<.*>\\s+\\w+$") || isMapVar) {
             return " = new HashMap<>();";
         }
-        // Map without generic
-        if (trimmed.matches("Map\\s+\\w+$")) {
-            return " = new HashMap<>();";
-        }
-        // List with generic
-        if (trimmed.matches("List<\\w+>\\s+\\w+$")) {
+        if (trimmed.matches("List<.*>\\s+\\w+$") || isListVar) {
             return " = new ArrayList<>();";
         }
-        // List without generic
-        if (trimmed.matches("List\\s+\\w+$")) {
-            return " = new ArrayList<>();";
-        }
-        // Set with generic
-        if (trimmed.matches("Set<\\w+>\\s+\\w+$")) {
+        if (isSetVar) {
             return " = new HashSet<>();";
         }
-        // Set without generic
-        if (trimmed.matches("Set\\s+\\w+$")) {
-            return " = new HashSet<>();";
+        if (trimmed.matches("Date\\s+\\w+$") || isDateVar) {
+            return " = new Date();";
         }
-        // HashMap with generic
-        if (trimmed.matches("HashMap<\\w+,\\s*\\w+>\\s+\\w+$")) {
-            return " = new HashMap<>();";
-        }
-        // HashMap without generic
-        if (trimmed.matches("HashMap\\s+\\w+$")) {
-            return " = new HashMap<>();";
-        }
-        // ArrayList
-        if (trimmed.matches("ArrayList<\\w+>\\s+\\w+$")) {
-            return " = new ArrayList<>();";
-        }
-        if (trimmed.matches("ArrayList\\s+\\w+$")) {
-            return " = new ArrayList<>();";
-        }
-        // Object
         if (trimmed.matches("Object\\s+\\w+$")) {
             return " = null;";
-        }
-        // Date
-        if (trimmed.matches("Date\\s+\\w+$")) {
-            return " = new Date();";
         }
         return null;
     }
@@ -406,11 +434,11 @@ public class LocalCodeAnalyzer {
     private static String matchThrow(String line) {
         String trimmed = line.trim();
 
-        if (trimmed.matches("throw\\s+new\\s+\\w+$")) {
-            String ex = trimmed.replaceFirst("throw\\s+new\\s+", "");
+        if (trimmed.matches("throw new \\w+$")) {
+            String ex = trimmed.replaceFirst("throw new ", "");
             return ex + "(\"\");";
         }
-        if (trimmed.matches("throw\\s+new\\s+\\w+\\([^)]*$")) {
+        if (trimmed.matches("throw new \\w+\\([^)]*$")) {
             return "\"\");";
         }
         return null;
@@ -431,8 +459,8 @@ public class LocalCodeAnalyzer {
     private static String matchBraceOpen(String line) {
         String trimmed = line.trim();
 
-        if (trimmed.matches("\\{\\s*$")) {
-            return "\n    // TODO\n}";
+        if (trimmed.equals("{") || trimmed.matches("\\{\\s*$")) {
+            return "\n    \n}";
         }
         return null;
     }
@@ -440,9 +468,8 @@ public class LocalCodeAnalyzer {
     private static String matchElseIf(String line) {
         String trimmed = line.trim();
 
-        // else 单独输入
-        if (trimmed.equals("else") || trimmed.matches("else\\s*$")) {
-            return " if (condition) {\n    \n} else {\n    \n}";
+        if (trimmed.equals("elseif") || trimmed.equals("else if") || trimmed.matches("else if\\s*$")) {
+            return " (condition) {\n    \n}";
         }
         return null;
     }
@@ -450,32 +477,153 @@ public class LocalCodeAnalyzer {
     private static String matchDoWhile(String line) {
         String trimmed = line.trim();
 
-        // do 单独输入
         if (trimmed.equals("do") || trimmed.matches("do\\s*$")) {
-            return " {\n    // Loop body\n} while (condition);";
-        }
-        // do {
-        if (trimmed.matches("do\\s*\\{\\s*$")) {
-            return "\n    // Loop body\n} while (condition);";
+            return " {\n    \n} while (condition);";
         }
         return null;
     }
 
-    private static int getLineStart(String text, int pos) {
-        int start = pos;
-        while (start > 0 && text.charAt(start - 1) != '\n') {
-            start--;
+    private static String matchNullCheck(String line, ContextVariables vars) {
+        String trimmed = line.trim();
+
+        if (trimmed.equals("null") || trimmed.matches("null\\s*$")) {
+            return "if (" + vars.getFirstObject() + " != null) {\n    \n}";
         }
-        return start;
+        return null;
     }
 
-    /**
-     * Get supported analysis pattern list
-     */
+    private static String matchMethodChain(String line, ContextVariables vars) {
+        String trimmed = line.trim();
+
+        if (trimmed.matches("\\w+\\.\\s*$")) {
+            String objName = trimmed.replaceFirst("\\.\\s*$", "").trim();
+            return getSmartMethodSuggestions(objName, vars);
+        }
+        return null;
+    }
+
+    private static String getSmartMethodSuggestions(String objName, ContextVariables vars) {
+        StringBuilder suggestions = new StringBuilder();
+
+        boolean isString = vars.strings.contains(objName);
+        boolean isList = vars.lists.contains(objName);
+        boolean isMap = vars.maps.contains(objName);
+        boolean isCollection = vars.collections.contains(objName);
+
+        if (isString || objName.toLowerCase().contains("str") || objName.toLowerCase().contains("name")) {
+            suggestions.append("isEmpty();\nisBlank();\ntrim();\nlength();\nindexOf(\"\");\ncontains(\"\");");
+        } else if (isList || objName.toLowerCase().contains("list")) {
+            suggestions.append("add( );\nget(0);\nremove(0);\nclear();\nsize();\nisEmpty();\ncontains( );");
+        } else if (isMap || objName.toLowerCase().contains("map") || objName.toLowerCase().contains("data")) {
+            suggestions.append("get(\"\");\nput(\"\", );\ncontainsKey(\"\");\nkeySet();\nvalues();\nentrySet();");
+        } else if (isCollection || objName.toLowerCase().contains("set")) {
+            suggestions.append("add( );\ncontains( );\nremove( );\nsize();\nisEmpty();");
+        } else {
+            suggestions.append("toString();\nequals( );\nhashCode();");
+        }
+
+        return suggestions.toString();
+    }
+
+    private static String matchSwitchEnhanced(String line, ContextVariables vars) {
+        String trimmed = line.trim();
+
+        if (trimmed.equals("switch") || trimmed.matches("switch\\s*$")) {
+            return " (" + vars.getFirstObject() + ") {\n    case :\n        break;\n    default:\n        break;\n}";
+        }
+        if (trimmed.matches("switch\\s*\\([^)]+\\)\\s*$")) {
+            return ") {\n    case :\n        break;\n    default:\n        break;\n}";
+        }
+        return null;
+    }
+
+    private static String matchEnhancedTry(String line, ContextVariables vars) {
+        String trimmed = line.trim();
+
+        if (trimmed.equals("try") || trimmed.matches("try\\s*$")) {
+            return " {\n    \n} catch (Exception e) {\n    e.printStackTrace();\n}";
+        }
+        if (trimmed.matches("try\\s*\\(\\s*$")) {
+            return "BufferedReader br = new BufferedReader(new FileReader(\"\"))) {\n    \n} catch (IOException e) {\n    e.printStackTrace();\n}";
+        }
+        return null;
+    }
+
+    private static String matchQuickTemplate(String line, ContextVariables vars) {
+        String trimmed = line.trim().toLowerCase();
+
+        if (trimmed.equals("main")) {
+            return " public static void main(String[] args) {\n    \n}";
+        }
+        if (trimmed.equals("sysout")) {
+            return "System.out.println();";
+        }
+        if (trimmed.equals("singleton")) {
+            return "private static final Singleton instance = new Singleton();\nprivate Singleton() {}\npublic static Singleton getInstance() {\n    return instance;\n}";
+        }
+        if (trimmed.equals("synchronized") || trimmed.equals("sync")) {
+            return " (obj) {\n    \n}";
+        }
+        if (trimmed.equals("stream") || trimmed.equals("streamify")) {
+            return vars.getFirstList() + ".stream()\n    .filter(e -> )\n    .map(e -> )\n    .collect(Collectors.toList());";
+        }
+        if (trimmed.matches("get\\w+") && !trimmed.equals("get")) {
+            String fieldName = trimmed.substring(3).toLowerCase();
+            if (!fieldName.isEmpty()) {
+                String capitalized = fieldName.substring(0, 1).toUpperCase() + fieldName.substring(1);
+                return " public Object get" + capitalized + "() {\n    return " + fieldName + ";\n}";
+            }
+        }
+        if (trimmed.matches("set\\w+") && !trimmed.equals("set")) {
+            String fieldName = trimmed.substring(3).toLowerCase();
+            if (!fieldName.isEmpty()) {
+                String capitalized = fieldName.substring(0, 1).toUpperCase() + fieldName.substring(1);
+                return " public void set" + capitalized + "(Object " + fieldName + ") {\n    this." + fieldName + " = " + fieldName + ";\n}";
+            }
+        }
+        return null;
+    }
+
+    private static String matchStreamAPI(String line, ContextVariables vars) {
+        String trimmed = line.trim();
+
+        if (trimmed.matches("\\w+\\.stream\\(\\)\\s*$")) {
+            return ".filter(e -> )\n.map(e -> )\n.collect(Collectors.toList());";
+        }
+        if (trimmed.matches("\\.filter\\(\\s*$")) {
+            return "e -> e.";
+        }
+        if (trimmed.matches("\\.map\\(\\s*$")) {
+            return "e -> e.";
+        }
+        if (trimmed.matches("\\.forEach\\(\\s*$")) {
+            return "e -> System.out.println(e);";
+        }
+        if (trimmed.matches("\\.collect\\(\\s*$")) {
+            return "Collectors.toList());";
+        }
+        if (trimmed.matches("\\.sort\\(\\s*$")) {
+            return "Comparator.comparing(e -> e.);";
+        }
+        return null;
+    }
+
+    private static String matchLambdaShortcut(String line, ContextVariables vars) {
+        String trimmed = line.trim();
+
+        if (trimmed.equals("->") || trimmed.matches("->\\s*$")) {
+            return " {\n    \n}";
+        }
+        if (trimmed.equals("::") || trimmed.matches("::\\s*$")) {
+            return "methodName;";
+        }
+        return null;
+    }
+
     public static String getSupportedPatterns() {
         return "Supported patterns:\n" +
-               "- if/else statements\n" +
-               "- for/foreach loops\n" +
+               "- if/else, null check shortcuts\n" +
+               "- for/foreach loops (with context-aware variables)\n" +
                "- while/do-while loops\n" +
                "- try-catch blocks\n" +
                "- switch statements\n" +
@@ -483,11 +631,15 @@ public class LocalCodeAnalyzer {
                "- constructors\n" +
                "- class definitions\n" +
                "- @Override annotation\n" +
-               "- method calls\n" +
+               "- method calls & chains\n" +
                "- object creation (new)\n" +
-               "- variable declaration and initialization\n" +
+               "- variable declaration (smart inference)\n" +
                "- return/throw statements\n" +
                "- Logger calls\n" +
+               "- Stream API shortcuts\n" +
+               "- Lambda expressions\n" +
+               "- Quick templates (main, singleton)\n" +
+               "- getter/setter shortcuts\n" +
                "- brace completion";
     }
 }

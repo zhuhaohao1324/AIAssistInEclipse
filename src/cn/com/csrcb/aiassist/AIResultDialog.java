@@ -20,6 +20,7 @@ public class AIResultDialog extends Dialog {
 	private final int offset;
 	private final int length;
 	private final String resultText;
+	private final String displayText;
 	private final SelectionMode mode;
 
 	private Text resultBox;
@@ -31,6 +32,7 @@ public class AIResultDialog extends Dialog {
 		this.offset = offset;
 		this.length = length;
 		this.resultText = resultText == null ? "" : resultText;
+		this.displayText = formatForDisplay(this.resultText);
 		this.mode = mode;
 		setShellStyle(getShellStyle() | SWT.RESIZE);
 	}
@@ -55,7 +57,7 @@ public class AIResultDialog extends Dialog {
 		resultBox = new Text(c, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL | SWT.H_SCROLL);
 		resultBox.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
 		((GridData) resultBox.getLayoutData()).heightHint = 420;
-		resultBox.setText(resultText);
+		resultBox.setText(displayText);
 
 		// ✅ Ctrl+A / Ctrl+C 快捷键（强制）
 		hookCopyShortcuts(resultBox);
@@ -166,7 +168,9 @@ public class AIResultDialog extends Dialog {
 			return;
 
 		String indent = getLineIndent(doc, offset);
-		String comment = toBlockCommentWithIndent(explanation, indent);
+		// 对显示文本进行格式化后再转为注释
+		String formatted = formatForDisplay(explanation);
+		String comment = toBlockCommentWithIndent(formatted, indent);
 
 		// 插入到选中代码之前（offset 处）
 		insertAtOffset(comment, offset, 0);
@@ -206,6 +210,63 @@ public class AIResultDialog extends Dialog {
 			sb.append("\n");
 		}
 		sb.append(indent).append(" */\n");
+		return sb.toString();
+	}
+
+	// ------------------------
+	// 格式化AI返回的文本用于显示
+	// ------------------------
+	private static String formatForDisplay(String text) {
+		if (text == null || text.isEmpty()) {
+			return text;
+		}
+
+		// 1. 处理转义字符
+		String formatted = text;
+		formatted = formatted.replace("\\n", "\n");
+		formatted = formatted.replace("\\t", "\t");
+		formatted = formatted.replace("\\r", "\r");
+		formatted = formatted.replace("\\\"", "\"");
+		formatted = formatted.replace("\\'", "'");
+		formatted = formatted.replace("\\\\", "\\");
+
+		formatted = decodeUnicode(formatted);
+
+		// 3. 处理Java转义 (&lt; &gt; 等)
+		formatted = formatted.replace("&lt;", "<");
+		formatted = formatted.replace("&gt;", ">");
+		formatted = formatted.replace("&amp;", "&");
+		formatted = formatted.replace("&quot;", "\"");
+
+		// 4. 清理多余的空行（超过2个连续空行改为1个）
+		formatted = formatted.replaceAll("\n{3,}", "\n\n");
+
+		return formatted.trim();
+	}
+
+	/**
+	 * 解码Unicode转义序列
+	 */
+	private static String decodeUnicode(String text) {
+		StringBuilder sb = new StringBuilder();
+		int i = 0;
+		while (i < text.length()) {
+			char c = text.charAt(i);
+			if (c == '\\' && i + 1 < text.length() && text.charAt(i + 1) == 'u') {
+				try {
+					String hex = text.substring(i + 2, i + 6);
+					int codePoint = Integer.parseInt(hex, 16);
+					sb.appendCodePoint(codePoint);
+					i += 6;
+				} catch (Exception e) {
+					sb.append(c);
+					i++;
+				}
+			} else {
+				sb.append(c);
+				i++;
+			}
+		}
 		return sb.toString();
 	}
 

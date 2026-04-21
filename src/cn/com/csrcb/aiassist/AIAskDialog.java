@@ -95,7 +95,7 @@ public class AIAskDialog extends Dialog {
 		GridData qGd = new GridData(SWT.FILL, SWT.FILL, true, true);
 		qGd.heightHint = 130;
 		questionText.setLayoutData(qGd);
-		questionText.setText("\u8BF7\u7528\u4E2D\u6587\u89E3\u91CA\u8FD9\u6BB5\u4EE3\u7801\u7684\u4F5C\u7528\u3002"); // 默认问题
+		questionText.setText(""); // 默认问题
 
 		// 状态栏（跨两列）
 		statusLabel = new Label(c, SWT.NONE);

@@ -434,8 +434,8 @@ public class AIHttpClient {
             URL url = new URL(urlStr);
             connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("POST");
-            connection.setConnectTimeout(Math.min(5000, timeoutMs));
-            connection.setReadTimeout(timeoutMs);
+//            connection.setConnectTimeout(Math.min(5000, timeoutMs));
+//            connection.setReadTimeout(timeoutMs);
             connection.setDoOutput(true);
 
             connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
@@ -460,8 +460,6 @@ public class AIHttpClient {
             item.put("threadId",null);
             userMessage.put("USER_INPUT", prompt);
             String questionType ="generateCode";
-            System.out.print("zzzz"+cacheMode);
-            System.out.print("111111\n");
             if(cacheMode.length()>=4) {
             	questionType =cacheMode.replace("ask_", "");
             	if("GENERATE_CODE".equals(questionType)) {
@@ -489,27 +487,18 @@ public class AIHttpClient {
             if (code < 200 || code >= 300) {
                 return null;
             }
-
-            @SuppressWarnings("unchecked")
-            Map<String, Object> resultMap = GSON.fromJson(resp, HashMap.class);
-            Object choicesObj = resultMap.get("choices");
-            if (!(choicesObj instanceof java.util.List) || ((java.util.List) choicesObj).isEmpty())
-                return null;
-
-            @SuppressWarnings("unchecked")
-            Map<String, Object> choice0 = (Map<String, Object>) ((java.util.List) choicesObj).get(0);
-
-            @SuppressWarnings("unchecked")
-            Map<String, Object> message = (Map<String, Object>) choice0.get("message");
-            if (message != null && message.get("content") instanceof String) {
-                return removeThinkTags((String) message.get("content"));
+            Map<String,Object> resultMap=GSON.fromJson(resp,HashMap.class);
+            if(resultMap ==null) {
+            	return null;
             }
+            Map data=(Map) resultMap.get("data");
+            if(data ==null) {
+            	return null;
+            }
+            String firstOutputText=(String) data.get("firstOutputText");
+            
 
-            Object text = choice0.get("text");
-            if (text instanceof String)
-                return removeThinkTags((String) text);
-
-            return null;
+            return firstOutputText;
 
         } catch (java.net.SocketTimeoutException te) {
             return null;
