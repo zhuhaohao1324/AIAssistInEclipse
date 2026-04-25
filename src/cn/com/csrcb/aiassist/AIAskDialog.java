@@ -198,6 +198,7 @@ public class AIAskDialog extends Dialog {
 
 	private static SelectionMode toMode(int idx) {
 		switch (idx) {
+		
 		case 0:
 			return SelectionMode.GENERATE_CODE;
 		case 1:
