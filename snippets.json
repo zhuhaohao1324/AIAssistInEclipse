@@ -1,0 +1,44 @@
+[
+    {
+        "prefix": "main",
+        "label": "主方法",
+        "code": "public static void main(String[] args) {\n    \n}",
+        "description": "Java主方法入口",
+        "priority": 10
+    },
+    {
+        "prefix": "mydao",
+        "label": "DAO查询",
+        "code": "public List<Entity> selectByCondition(Map<String, Object> params) {\n    return jdbcTemplate.query(sql, params, new BeanPropertyRowMapper<>(Entity.class));\n}",
+        "description": "通用DAO查询",
+        "priority": 10
+    },
+    {
+        "prefix": "mypage",
+        "label": "分页查询",
+        "code": "PageInfo<Entity> page = new PageInfo<>();\npage.setPageNum(pageNum);\npage.setPageSize(pageSize);\npage.setTotal(count);\npage.setList(resultList);\nreturn page;",
+        "description": "分页查询模板",
+        "priority": 9
+    },
+    {
+        "prefix": "myresult",
+        "label": "统一返回",
+        "code": "return Result.success(data);\n// 或\nreturn Result.error(\"错误信息\");",
+        "description": "统一返回结果",
+        "priority": 8
+    },
+    {
+        "prefix": "myvalidate",
+        "label": "参数校验",
+        "code": "if (StringUtils.isBlank(param)) {\n    throw new IllegalArgumentException(\"参数不能为空\");\n}",
+        "description": "参数校验模板",
+        "priority": 8
+    },
+    {
+        "prefix": "mylog",
+        "label": "操作日志",
+        "code": "log.info(\"操作描述: {}, 参数: {}\", description, JSON.toJSONString(param));",
+        "description": "记录操作日志",
+        "priority": 6
+    }
+]

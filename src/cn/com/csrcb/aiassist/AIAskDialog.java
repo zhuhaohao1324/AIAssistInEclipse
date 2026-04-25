@@ -8,14 +8,14 @@ import org.eclipse.swt.widgets.*;
 import cn.com.csrcb.aiassist.PromptTemplates.SelectionMode;
 
 /**
- * AIAskDialog: - 选中代码后 Alt+Q 弹出本对话框 - 点击“发送”不关闭窗口，而是显示“正在思考中...”，并回调给外部去发起后台请求
- * - 外部请求结束后可调用 dialog.setStatus(...) / dialog.setSendEnabled(true) 来恢复
+ * AIAskDialog: - ???????? Alt+Q ??????????? - ?????????????????????????????????????...????????????????????????
+ * - ??????????????? dialog.setStatus(...) / dialog.setSendEnabled(true) ?????
  *
- * 注意：为避免编码/导出环境导致中文乱码，这里按钮文本使用 Unicode 转义。
+ * ???????????/??????????????????????????????? Unicode ???^
  */
 public class AIAskDialog extends Dialog {
 
-	/** 用户点击发送后的结果 */
+	/** ?????????????? */
 	public static class AskResult {
 		public final String userQuestion;
 		public final SelectionMode mode;
@@ -26,7 +26,7 @@ public class AIAskDialog extends Dialog {
 		}
 	}
 
-	/** 发送回调：外部负责启动 Job / HTTP 调用 */
+	/** ?????????????????? Job / HTTP ???? */
 	public interface SendCallback {
 		void onSend(AskResult ask, AIAskDialog dialog);
 	}
@@ -39,6 +39,9 @@ public class AIAskDialog extends Dialog {
 	private Text questionText;
 	private Button sendBtn;
 	private Label statusLabel;
+	
+	private int animationDotCount = 0;
+	private Runnable animationRunnable;
 
 	private AIAskDialog(Shell parentShell, String selectedText, SendCallback cb) {
 		super(parentShell);
@@ -47,7 +50,7 @@ public class AIAskDialog extends Dialog {
 		setShellStyle(getShellStyle() | SWT.RESIZE);
 	}
 
-	/** 打开对话框（非阻塞回调式） */
+	/** ????????????????? */
 	public static void open(Shell shell, String selectedText, SendCallback cb) {
 		new AIAskDialog(shell, selectedText, cb).open();
 	}
@@ -55,8 +58,9 @@ public class AIAskDialog extends Dialog {
 	@Override
 	protected void configureShell(Shell newShell) {
 		super.configureShell(newShell);
-		// AI 提问
-		newShell.setText("\u0041\u0049\u0020\u63D0\u95EE"); // "AI 提问"
+		// AI ????
+		newShell.setText("\u0041\u0049\u0020\u63D0\u95EE"); // "AI ????"
+		newShell.setSize(650, 550);
 	}
 
 	@Override
@@ -67,69 +71,69 @@ public class AIAskDialog extends Dialog {
 		c.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
 		c.setLayout(new GridLayout(2, false));
 
-		// 模式
+		// ??
 		Label modeLabel = new Label(c, SWT.NONE);
-		modeLabel.setText("\u6A21\u5F0F\uFF1A"); // 模式：
+		modeLabel.setText("\u6A21\u5F0F\uFF1A"); // ????
 		modeCombo = new Combo(c, SWT.DROP_DOWN | SWT.READ_ONLY);
 		modeCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-		modeCombo.setItems(new String[] { "\u751F\u6210\u4EE3\u7801", // 生成代码
-				"\u4E2D\u6587\u89E3\u91CA", // 中文解释
-				"\u4E2D\u6587\u603B\u7ED3", // 中文总结			
-				"\u91CD\u6784\u5EFA\u8BAE" // 重构建议
+		modeCombo.setItems(new String[] { "\u751F\u6210\u4EE3\u7801", // ???????
+				"\u4E2D\u6587\u89E3\u91CA", // ???????
+				"\u4E2D\u6587\u603B\u7ED3", // ???????			
+				"\u91CD\u6784\u5EFA\u8BAE" // ???????
 		});
 		modeCombo.select(0);
 
-		// 选中预览
+		// ??????
 		Label previewLabel = new Label(c, SWT.NONE);
-		previewLabel.setText("\u9009\u4E2D\u9884\u89C8\uFF1A"); // 选中预览：
+		previewLabel.setText("\u9009\u4E2D\u9884\u89C8\uFF1A"); // ????????
 		previewText = new Text(c, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL | SWT.READ_ONLY);
 		GridData previewGd = new GridData(SWT.FILL, SWT.FILL, true, true);
-		previewGd.heightHint = 110;
+		previewGd.heightHint = 180;
 		previewText.setLayoutData(previewGd);
 		previewText.setText(selectedPreview);
 
-		// 提问
+		// ????
 		Label qLabel = new Label(c, SWT.NONE);
-		qLabel.setText("\u63D0\u95EE\uFF1A"); // 提问：
+		qLabel.setText("\u63D0\u95EE\uFF1A"); // ?????
 		questionText = new Text(c, SWT.BORDER | SWT.MULTI | SWT.WRAP | SWT.V_SCROLL);
 		GridData qGd = new GridData(SWT.FILL, SWT.FILL, true, true);
-		qGd.heightHint = 130;
+		qGd.heightHint = 200;
 		questionText.setLayoutData(qGd);
-		questionText.setText(""); // 默认问题
+		questionText.setText(""); // ???????
 
-		// 状态栏（跨两列）
+		// ??????????????
 		statusLabel = new Label(c, SWT.NONE);
 		GridData statusGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
 		statusGd.horizontalSpan = 2;
 		statusLabel.setLayoutData(statusGd);
-		statusLabel.setText(""); // 初始为空
+		statusLabel.setText(""); // ??????
 
 		return area;
 	}
 
 	@Override
 	protected void createButtonsForButtonBar(Composite parent) {
-		// 发送 / 关闭 —— 用 Unicode 避免乱码
-		sendBtn = createButton(parent, 2001, "\u53D1\u9001", true); // 发送
-		createButton(parent, 2002, "\u5173\u95ED", false); // 关闭
+		// ???? / ??? ???? ?? Unicode ????????
+		sendBtn = createButton(parent, 2001, "\u53D1\u9001", true); // ????
+		createButton(parent, 2002, "\u5173\u95ED", false); // ???
 	}
 
 	@Override
 	protected void buttonPressed(int buttonId) {
-		if (buttonId == 2002) { // 关闭
+		if (buttonId == 2002) { // ???
 			close();
 			return;
 		}
 
-		if (buttonId == 2001) { // 发送
+		if (buttonId == 2001) { // ????
 			String q = questionText.getText() == null ? "" : questionText.getText().trim();
 			if (q.length() == 0) {
 				q = "\u8BF7\u7528\u4E2D\u6587\u89E3\u91CA\u8FD9\u6BB5\u4EE3\u7801\u7684\u4F5C\u7528\u3002";
 			}
 			SelectionMode mode = toMode(modeCombo.getSelectionIndex());
 
-			// 不关闭，显示状态并禁用发送按钮（外部请求结束后再恢复）
-			setStatus("\u6B63\u5728\u601D\u8003\u4E2D..."); // 正在思考中...
+			// ??????????????????????????????????????????
+			startLoadingAnimation("\u6B63\u5728\u601D\u8003\u4E2D"); // ?????????...
 			setSendEnabled(false);
 
 			if (callback != null) {
@@ -141,22 +145,53 @@ public class AIAskDialog extends Dialog {
 		super.buttonPressed(buttonId);
 	}
 
-	/** 外部调用：恢复/禁用“发送”按钮 */
+	/** ??????????/?????????????? */
 	public void setSendEnabled(boolean enabled) {
 		if (sendBtn != null && !sendBtn.isDisposed()) {
 			sendBtn.setEnabled(enabled);
 		}
 	}
 
-	/** 外部调用：更新状态文本 */
+	/** ???????????????? */
 	public void setStatus(String text) {
 		if (statusLabel != null && !statusLabel.isDisposed()) {
 			statusLabel.setText(text == null ? "" : text);
 		}
 	}
 
-	/** 外部调用：快速恢复到“可再次发送”的状态 */
+	/** ?????????? (?????????.) */
+	public void startLoadingAnimation(String baseText) {
+		stopLoadingAnimation();
+		animationDotCount = 0;
+		animationRunnable = new Runnable() {
+			@Override
+			public void run() {
+				if (statusLabel == null || statusLabel.isDisposed()) {
+					return;
+				}
+				StringBuilder dots = new StringBuilder();
+				for (int i = 0; i < animationDotCount; i++) {
+					dots.append('.');
+				}
+				statusLabel.setText(baseText + dots.toString());
+				animationDotCount = (animationDotCount % 3) + 1;
+				statusLabel.getDisplay().timerExec(400, this);
+			}
+		};
+		statusLabel.getDisplay().timerExec(400, animationRunnable);
+	}
+
+	/** ????????? */
+	public void stopLoadingAnimation() {
+		if (animationRunnable != null) {
+			statusLabel.getDisplay().timerExec(-1, animationRunnable);
+			animationRunnable = null;
+		}
+	}
+
+	/** ??????????????????????????????? */
 	public void resetToIdle() {
+		stopLoadingAnimation();
 		setStatus("");
 		setSendEnabled(true);
 	}
