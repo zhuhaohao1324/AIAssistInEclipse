@@ -102,7 +102,160 @@ public class LocalCodeAnalyzer {
         suggestion = matchLambdaShortcut(trimmed, vars);
         if (suggestion != null) return suggestion;
 
+        // 空行时，查找上下文中的 map.put() 模式并预测下一个
+        if (trimmed.isEmpty()) {
+            suggestion = matchMapPutFromContext(contextText, cursorInContext, vars);
+            if (suggestion != null) return suggestion;
+        }
+
         return null;
+    }
+
+    /**
+     * 空行时，查找上下文中的 map.put() 调用并预测下一个
+     * 例如：
+     * sendmap.put("111", "222");
+     * sendmap.put("112", "222");
+     * [空行] -> 预测: sendmap.put("113", "222");
+     */
+    private static String matchMapPutFromContext(String contextText, int cursorInContext, ContextVariables vars) {
+        // 查找所有 xxx.put("key", value) 模式
+        Pattern putPattern = Pattern.compile("(\\w+)\\s*\\.\\s*put\\s*\\(\\s*\"([^\"]+)\"\\s*,\\s*([^;)]+)\\s*\\)\\s*;");
+        Matcher matcher = putPattern.matcher(contextText);
+
+        List<String> mapNames = new ArrayList<>();
+        List<String> keys = new ArrayList<>();
+        List<String> values = new ArrayList<>();
+
+        while (matcher.find()) {
+            String mapName = matcher.group(1);
+            String key = matcher.group(2);
+            String value = matcher.group(3).trim();
+
+            // 找到匹配在光标之前的
+            if (matcher.start() < cursorInContext) {
+                mapNames.add(mapName);
+                keys.add(key);
+                values.add(value);
+            }
+        }
+
+        if (keys.isEmpty()) {
+            return null;
+        }
+
+        // 获取最后一个 map.put() 的信息
+        String mapName = mapNames.get(mapNames.size() - 1);
+        String lastKey = keys.get(keys.size() - 1);
+        String lastValue = values.get(values.size() - 1);
+
+        // 推断下一个键和值
+        String nextKey = inferNextMapKey(lastKey);
+        String nextValue = inferNextMapValue(lastValue);
+
+        return mapName + ".put(\"" + nextKey + "\", " + nextValue + ");";
+    }
+
+    /**
+     * 推断下一个 map 键
+     */
+    private static String inferNextMapKey(String currentKey) {
+        // 纯数字键：递增
+        if (currentKey.matches("\\d+")) {
+            try {
+                return String.valueOf(Integer.parseInt(currentKey) + 1);
+            } catch (NumberFormatException e) {}
+        }
+
+        // 带数字后缀的键：如 "112" -> "113"
+        if (currentKey.matches("\\d+$")) {
+            String numStr = "";
+            int i = currentKey.length() - 1;
+            while (i >= 0 && Character.isDigit(currentKey.charAt(i))) {
+                numStr = currentKey.charAt(i) + numStr;
+                i--;
+            }
+            if (!numStr.isEmpty()) {
+                String prefix = currentKey.substring(0, i + 1);
+                return prefix + (Integer.parseInt(numStr) + 1);
+            }
+        }
+
+        // 带数字前缀的键：如 "k1" -> "k2"
+        if (currentKey.matches("\\D+\\d+")) {
+            String prefix = currentKey.replaceAll("\\d+$", "");
+            String numStr = currentKey.replaceAll("\\D+", "");
+            return prefix + (Integer.parseInt(numStr) + 1);
+        }
+
+        // 常见字段名序列
+        String[][] sequences = {
+            {"userId", "userName", "userAge", "userEmail"},
+            {"AcctNo", "AcctSt", "AcctNm"},
+            {"minValue", "maxValue"},
+            {"startDate", "endDate"}
+        };
+
+        for (String[] seq : sequences) {
+            for (int i = 0; i < seq.length - 1; i++) {
+                if (seq[i].equalsIgnoreCase(currentKey)) {
+                    return seq[i + 1];
+                }
+            }
+        }
+
+        // 默认：原键 + "2"
+        return currentKey + "2";
+    }
+
+    /**
+     * 推断下一个 map 值
+     */
+    private static String inferNextMapValue(String currentValue) {
+        String trimmed = currentValue.trim();
+
+        // 字符串字面量中的数字递增：如 "222" -> "223"
+        if (trimmed.matches("\"[^\"]*\\d+\"")) {
+            String content = trimmed.substring(1, trimmed.length() - 1);
+            int lastDigitPos = -1;
+            for (int i = content.length() - 1; i >= 0; i--) {
+                if (Character.isDigit(content.charAt(i))) {
+                    lastDigitPos = i;
+                } else {
+                    break;
+                }
+            }
+
+            if (lastDigitPos >= 0) {
+                String prefix = content.substring(0, lastDigitPos);
+                String numStr = "";
+                for (int i = lastDigitPos; i < content.length(); i++) {
+                    if (Character.isDigit(content.charAt(i))) {
+                        numStr += content.charAt(i);
+                    } else {
+                        break;
+                    }
+                }
+                try {
+                    return "\"" + prefix + (Integer.parseInt(numStr) + 1) + "\"";
+                } catch (NumberFormatException e) {}
+            }
+        }
+
+        // 纯数字：递增
+        if (trimmed.matches("\\d+")) {
+            try {
+                return String.valueOf(Integer.parseInt(trimmed) + 1);
+            } catch (NumberFormatException e) {}
+        }
+
+        // 变量引用：保持原样
+        if (trimmed.matches("\\w+")) {
+            return trimmed;
+        }
+
+        // 复杂表达式：保持原样
+        return currentValue;
     }
 
     static class ContextVariables {

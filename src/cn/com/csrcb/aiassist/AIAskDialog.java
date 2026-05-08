@@ -128,7 +128,7 @@ public class AIAskDialog extends Dialog {
 		if (buttonId == 2001) { // ????
 			String q = questionText.getText() == null ? "" : questionText.getText().trim();
 			if (q.length() == 0) {
-				q = "\u8BF7\u7528\u4E2D\u6587\u89E3\u91CA\u8FD9\u6BB5\u4EE3\u7801\u7684\u4F5C\u7528\u3002";
+				q = "\\u5e2e\\u6211\\u751f\\u6210\\u4ee3\\u7801";
 			}
 			SelectionMode mode = toMode(modeCombo.getSelectionIndex());
 

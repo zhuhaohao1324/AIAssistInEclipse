@@ -66,7 +66,7 @@ public class AIHttpClient {
      */
     public static String generateSemanticCacheKey(String contextText, int cursorInContext) {
         StringBuilder key = new StringBuilder();
-        
+
         // 1. 提取当前行内容（去空格）
         String currentLine = getCurrentLine(contextText, cursorInContext);
         String normalizedLine = currentLine.trim().replaceAll("\\s+", " ");
@@ -125,7 +125,7 @@ public class AIHttpClient {
     /**
      * 获取当前行
      */
-    private static String getCurrentLine(String text, int cursorPos) {
+    public static String getCurrentLine(String text, int cursorPos) {
         int lineStart = cursorPos;
         while (lineStart > 0 && text.charAt(lineStart - 1) != '\n') {
             lineStart--;
@@ -319,25 +319,45 @@ public class AIHttpClient {
 
     public static String callAICompletion(String contextText, int cursorInContext, IProgressMonitor monitor) {
         // 使用语义化缓存Key
-        String cacheKey = generateSemanticCacheKey(contextText, cursorInContext);
-        
-        String cached = getFromCache(cacheKey);
-        if (cached != null) {
-            return cached;
-        }
+//        String cacheKey = generateSemanticCacheKey(contextText, cursorInContext);
+//
+//        String cached = getFromCache(cacheKey);
+//        if (cached != null) {
+//            return cached;
+//        }
 
-        String prompt = "你是java代码专家。根据上下文在光标位置继续补全可能需要的代码。只输出要插入的代码，不要解释，不要markdown。最多补全2行代码。上下文为:" + contextText + "\n光标位置在:" + cursorInContext + "\n";
+        // 增强提示词：根据当前代码上下文，预测下一行可能的代码
+        String currentLine = getCurrentLine(contextText, cursorInContext);
+        String prompt = "你是Java代码专家。根据上下文代码，在光标位置生成完整、可直接使用的代码补全。\n"
+            + "要求：\n"
+            + "1. 只输出纯代码，不要任何解释，不要markdown代码块标记\n"
+            + "2. 生成完整的代码语句或代码块（包含开始的{和结束的}），不要截断\n"
+            + "3. 代码要符合Java语法，与上下文风格完全一致\n"
+            + "4. 如果是方法体，补全完整的方法实现\n"
+            + "5. 如果是语句，补全完整的语句（包含分号）\n"
+            + "6. 如果是控制结构(if/for/while等)，补全完整结构包括所有大括号\n"
+            + "\n上下文代码：\n" + contextText + "\n"
+            + "\n只输出补全的代码：";
 
         String result = callAI(prompt, monitor);
-        if (result != null && !result.startsWith("\n// AI")) {
-            putToCache(cacheKey, result);
-        }
+//        if (result != null && !result.startsWith("\n// AI")) {
+//            putToCache(cacheKey, result);
+//        }
         return result;
+    }
+
+    /**
+     * 直接使用给定 prompt 调用 AI
+     */
+    public static String callAIWithPrompt(String prompt, IProgressMonitor monitor) {
+        return callAI(prompt, monitor);
     }
 
     public static String callAI(String prompt, IProgressMonitor monitor) {
         String urlStr = "http://170.100.147.31:8080/v1/completions";
-        String apiKey = "f6173988-16ff-4ba4-9aa8-0a44eb1c341c";
+//    	 String urlStr = "http://127.0.0.1:8080/mock/chat";
+
+        String apiKey = "f5b23527-9b6b-4335-b009-fa9d732bbbaf";
 
         HttpURLConnection connection = null;
         try {
@@ -366,8 +386,8 @@ public class AIHttpClient {
 
             body.put("messages", new Object[] { systemMessage, userMessage });
             body.put("temperature", 0);
-            body.put("model", "Qwen3-235B");
-            body.put("max_tokens", 2048);
+            body.put("model", "Qwen2.5-72B-Instruct");
+            body.put("max_tokens", 512);
 
             String jsonBody = GSON.toJson(body);
             System.out.print("send:"+jsonBody);
@@ -412,7 +432,7 @@ public class AIHttpClient {
                 return "\n// AI response missing content\n" + resp + "\n";
             }
 
-            return removeThinkTags((String) content);
+            return decodeUnicode(removeThinkTags((String) content));
 
         } catch (Exception e) {
             return "\n// AI exception: " + e.getClass().getName() + ": " + e.getMessage() + "\n";
@@ -420,6 +440,34 @@ public class AIHttpClient {
             if (connection != null)
                 connection.disconnect();
         }
+    }
+
+    /**
+     * 解码 Unicode 转义字符（如 \u7b2c -> 第）
+     */
+    public static String decodeUnicode(String text) {
+        if (text == null || !text.contains("\\u")) {
+            return text;
+        }
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        while (i < text.length()) {
+            if (i + 6 <= text.length() && text.charAt(i) == '\\' && text.charAt(i + 1) == 'u') {
+                try {
+                    String hex = text.substring(i + 2, i + 6);
+                    int code = Integer.parseInt(hex, 16);
+                    sb.append((char) code);
+                    i += 6;
+                } catch (NumberFormatException e) {
+                    sb.append(text.charAt(i));
+                    i++;
+                }
+            } else {
+                sb.append(text.charAt(i));
+                i++;
+            }
+        }
+        return sb.toString();
     }
 
     public static String callAIWithTimeout(String prompt, int timeoutMs, IProgressMonitor monitor,String cacheMode) {
