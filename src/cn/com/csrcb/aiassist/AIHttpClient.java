@@ -326,34 +326,82 @@ public class AIHttpClient {
 //            return cached;
 //        }
 
-        // 增强提示词：根据当前代码上下文，预测下一行可能的代码
-        String currentLine = getCurrentLine(contextText, cursorInContext);
-        String prompt = "你是Java代码专家。根据上下文代码，在光标位置生成完整、可直接使用的代码补全。\n"
-            + "要求：\n"
-            + "1. 只输出纯代码，不要任何解释，不要markdown代码块标记\n"
-            + "2. 生成完整的代码语句或代码块（包含开始的{和结束的}），不要截断\n"
-            + "3. 代码要符合Java语法，与上下文风格完全一致\n"
-            + "4. 如果是方法体，补全完整的方法实现\n"
-            + "5. 如果是语句，补全完整的语句（包含分号）\n"
-            + "6. 如果是控制结构(if/for/while等)，补全完整结构包括所有大括号\n"
-            + "\n上下文代码：\n" + contextText + "\n"
-            + "\n只输出补全的代码：";
-
-        String result = callAI(prompt, monitor);
+        String prompt = PromptTemplates.buildInlineCompletionPrompt(contextText, cursorInContext);
+        String result = normalizeInlineCompletion(callAI(prompt, monitor, 96), contextText, cursorInContext);
 //        if (result != null && !result.startsWith("\n// AI")) {
 //            putToCache(cacheKey, result);
 //        }
         return result;
     }
 
+    /** 行内补全专用 max_tokens */
+    private static final int INLINE_COMPLETION_MAX_TOKENS = 96;
+
     /**
-     * 直接使用给定 prompt 调用 AI
+     * 直接使用给定 prompt 调用 AI（默认较长输出，供 Agent 聊天等）
      */
     public static String callAIWithPrompt(String prompt, IProgressMonitor monitor) {
-        return callAI(prompt, monitor);
+        return callAI(prompt, monitor, 512);
+    }
+
+    /**
+     * Alt+Q 行内补全：限制 token 并裁剪为 1-2 行
+     */
+    public static String callAIWithPromptForInlineCompletion(String prompt, String contextText,
+            int cursorInContext, IProgressMonitor monitor) {
+        String raw = callAI(prompt, monitor, INLINE_COMPLETION_MAX_TOKENS);
+        return normalizeInlineCompletion(raw, contextText, cursorInContext);
+    }
+
+    /**
+     * 将 AI 输出规范为 1-2 行可采纳的 ghost 补全
+     */
+    public static String normalizeInlineCompletion(String raw, String contextText, int cursorInContext) {
+        if (raw == null) return "";
+        String s = removeThinkTags(raw).trim();
+        if (s.startsWith("\n// AI")) return "";
+
+        // 去掉 markdown 代码块
+        s = s.replaceAll("(?s)```[a-zA-Z]*\\s*", "").replace("```", "").trim();
+
+        // 去掉可能重复输出的当前行前缀
+        String linePrefix = getCurrentLine(contextText, cursorInContext).trim();
+        if (!linePrefix.isEmpty() && s.startsWith(linePrefix)) {
+            s = s.substring(linePrefix.length()).trim();
+        }
+
+        // 最多保留 2 行非空内容
+        String[] lines = s.split("\r?\n");
+        StringBuilder kept = new StringBuilder();
+        int count = 0;
+        for (String line : lines) {
+            String t = line.trim();
+            if (t.isEmpty()) continue;
+            if (count > 0) kept.append('\n');
+            kept.append(t);
+            count++;
+            if (count >= 2) break;
+        }
+        s = kept.toString().trim();
+
+        // 单行过长时截断到合理长度（避免整段方法）
+        if (!s.contains("\n") && s.length() > 200) {
+            int cut = s.indexOf(';');
+            if (cut > 0 && cut < 180) {
+                s = s.substring(0, cut + 1);
+            } else {
+                s = s.substring(0, 200);
+            }
+        }
+
+        return s;
     }
 
     public static String callAI(String prompt, IProgressMonitor monitor) {
+        return callAI(prompt, monitor, 512);
+    }
+
+    public static String callAI(String prompt, IProgressMonitor monitor, int maxTokens) {
         String urlStr = "http://170.100.147.31:8080/v1/completions";
 //    	 String urlStr = "http://127.0.0.1:8080/mock/chat";
 
@@ -387,7 +435,7 @@ public class AIHttpClient {
             body.put("messages", new Object[] { systemMessage, userMessage });
             body.put("temperature", 0);
             body.put("model", "Qwen2.5-72B-Instruct");
-            body.put("max_tokens", 512);
+            body.put("max_tokens", maxTokens);
 
             String jsonBody = GSON.toJson(body);
             System.out.print("send:"+jsonBody);

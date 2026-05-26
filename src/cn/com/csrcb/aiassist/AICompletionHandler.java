@@ -100,8 +100,9 @@ public class AICompletionHandler extends AbstractHandler {
             String contextText = ContextUtil.getContextWindow(doc, triggerDocOffset, before, after);
             int cursorInContext = ContextUtil.cursorInContext(doc, triggerDocOffset, before);
 
-            // ===== 增强：获取 AST 上下文 =====
-            astContext = getASTContext(editor, triggerDocOffset);
+            // ===== 增强：获取 AST 上下文（快照，避免异步 Job 读到下一次请求的状态）=====
+            final ASTAnalyzer.EnhancedContext astCtxSnapshot = getASTContext(editor, triggerDocOffset);
+            astContext = astCtxSnapshot;
 
             // 使用语义化缓存Key，提高缓存命中率
             final String completionKey = AIHttpClient.generateSemanticCacheKey(contextText, cursorInContext);
@@ -116,9 +117,11 @@ public class AICompletionHandler extends AbstractHandler {
             // ===== 步骤1：先检查缓存，命中则立即显示 =====
             String cachedResult = AIHttpClient.getCachedResult(completionKey);
             if (cachedResult != null && !cachedResult.isEmpty()) {
+                final String inlineCached = AIHttpClient.normalizeInlineCompletion(
+                        cachedResult, contextText, cursorInContext);
                 System.out.println("AICompletionHandler: 缓存命中，立即显示！");
                 Display.getDefault().asyncExec(() -> {
-                    showGhostCompletion(editor, triggerDocOffset, triggerWidgetCaret, cachedResult);
+                    showGhostCompletion(editor, triggerDocOffset, triggerWidgetCaret, inlineCached);
                 });
                 // 继续后台调用AI更新缓存
             } else {
@@ -139,7 +142,8 @@ public class AICompletionHandler extends AbstractHandler {
                 protected IStatus run(IProgressMonitor monitor) {
                     try {
                         // 使用增强的上下文调用 AI
-                        String aiResult = callAIWithEnhancedContext(editor, contextText, cursorInContext, triggerDocOffset, monitor);
+                        String aiResult = callAIWithEnhancedContext(
+                                contextText, cursorInContext, astCtxSnapshot, monitor);
 
                         // 去重检查：确保这个结果还是给当前光标位置的
                         if (!completionKey.equals(currentCompletionKey)) {
@@ -204,79 +208,17 @@ public class AICompletionHandler extends AbstractHandler {
     /**
      * 使用增强上下文调用 AI
      */
-    private String callAIWithEnhancedContext(ITextEditor editor, String contextText,
-                                            int cursorInContext, int triggerDocOffset,
-                                            IProgressMonitor monitor) throws Exception {
+    private String callAIWithEnhancedContext(String contextText, int cursorInContext,
+            ASTAnalyzer.EnhancedContext astCtx, IProgressMonitor monitor) throws Exception {
         String enhancedPrompt;
-
-        if (astContext != null) {
-            // 使用增强的 prompt
-            StringBuilder enhanced = new StringBuilder();
-            enhanced.append("【代码上下文增强信息】\n");
-
-            // 当前类信息
-            if (astContext.currentClass.name != null) {
-                enhanced.append("// 当前类: ").append(astContext.currentClass.qualifiedName).append("\n");
-
-                if (astContext.currentClass.typeHierarchy.superclass != null) {
-                    enhanced.append("// 父类: ").append(astContext.currentClass.typeHierarchy.qualifiedSuperclass).append("\n");
-                }
-
-                if (!astContext.currentClass.typeHierarchy.interfaces.isEmpty()) {
-                    enhanced.append("// 实现的接口: ").append(String.join(", ", astContext.currentClass.typeHierarchy.qualifiedInterfaces)).append("\n");
-                }
-            }
-
-            // 当前方法
-            if (astContext.currentMethodSignature != null) {
-                enhanced.append("// 当前方法: ").append(astContext.currentMethodSignature).append("\n");
-            }
-
-            // 可用变量
-            if (!astContext.availableVariables.isEmpty()) {
-                enhanced.append("// 可用局部变量:\n");
-                for (ASTAnalyzer.VariableInfo var : astContext.availableVariables) {
-                    enhanced.append("//   ").append(var.type).append(" ").append(var.name).append("\n");
-                }
-            }
-
-            // 类字段
-            if (!astContext.classFields.isEmpty()) {
-                enhanced.append("// 类字段:\n");
-                for (String field : astContext.classFields) {
-                    enhanced.append("//   ").append(field).append("\n");
-                }
-            }
-
-            // 类方法
-            if (!astContext.classMethods.isEmpty()) {
-                enhanced.append("// 类方法:\n");
-                int count = 0;
-                for (String method : astContext.classMethods) {
-                    // 排除当前方法自身
-                    if (!method.startsWith(astContext.currentClass.name + "(") || count < astContext.classMethods.size() - 1) {
-                        enhanced.append("//   ").append(method).append("\n");
-                    }
-                    count++;
-                    if (count > 15) {
-                        enhanced.append("//   ... (更多方法)\n");
-                        break;
-                    }
-                }
-            }
-
-            enhanced.append("\n【待补全代码】\n");
-            enhanced.append(contextText);
-            enhanced.append("\n\n请根据上述上下文信息，生成准确的代码补全。直接返回补全内容，不需要解释。");
-
-            enhancedPrompt = enhanced.toString();
+        if (astCtx != null) {
+            enhancedPrompt = PromptTemplates.buildInlineCompletionPromptWithAst(
+                    contextText, astCtx, cursorInContext);
         } else {
-            // 降级使用原始上下文
-            enhancedPrompt = PromptTemplates.buildBasicCompletionPrompt(contextText, cursorInContext);
+            enhancedPrompt = PromptTemplates.buildInlineCompletionPrompt(contextText, cursorInContext);
         }
-
-        // 调用 AI
-        return AIHttpClient.callAIWithPrompt(enhancedPrompt, monitor);
+        return AIHttpClient.callAIWithPromptForInlineCompletion(
+                enhancedPrompt, contextText, cursorInContext, monitor);
     }
 
     /**

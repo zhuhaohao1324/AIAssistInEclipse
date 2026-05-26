@@ -28,87 +28,114 @@ public class LocalCodeAnalyzer {
         String suggestion = null;
 
         suggestion = matchIfStatement(trimmed, vars);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchForLoop(trimmed, vars);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchWhileLoop(trimmed);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchTryStatement(trimmed);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchSwitchStatement(trimmed);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchMethodDefinition(trimmed);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchConstructor(trimmed);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchClassDefinition(trimmed);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchOverride(trimmed);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchMethodCall(trimmed);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchObjectCreation(trimmed);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchVariableDeclaration(trimmed, vars);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchReturn(trimmed);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchThrow(trimmed);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchLogger(trimmed);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchBraceOpen(trimmed);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchElseIf(trimmed);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchDoWhile(trimmed);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchNullCheck(trimmed, vars);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchMethodChain(trimmed, vars);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchSwitchEnhanced(trimmed, vars);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchEnhancedTry(trimmed, vars);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchQuickTemplate(trimmed, vars);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchStreamAPI(trimmed, vars);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         suggestion = matchLambdaShortcut(trimmed, vars);
-        if (suggestion != null) return suggestion;
+        if (suggestion != null) return clipToInlineLines(suggestion, 2);
 
         // 空行时，查找上下文中的 map.put() 模式并预测下一个
         if (trimmed.isEmpty()) {
             suggestion = matchMapPutFromContext(contextText, cursorInContext, vars);
-            if (suggestion != null) return suggestion;
+            if (suggestion != null) {
+                return clipToInlineLines(suggestion, 2);
+            }
         }
 
         return null;
+    }
+
+    /** 本地建议也限制为最多 maxLines 行，与 Alt+Q 短补全一致 */
+    private static String clipToInlineLines(String suggestion, int maxLines) {
+        if (suggestion == null || suggestion.isEmpty()) {
+            return suggestion;
+        }
+        String[] lines = suggestion.split("\r?\n");
+        StringBuilder kept = new StringBuilder();
+        int count = 0;
+        for (String line : lines) {
+            String t = line.trim();
+            if (t.isEmpty()) {
+                continue;
+            }
+            if (count > 0) {
+                kept.append('\n');
+            }
+            kept.append(t);
+            count++;
+            if (count >= maxLines) {
+                break;
+            }
+        }
+        return kept.toString();
     }
 
     /**
